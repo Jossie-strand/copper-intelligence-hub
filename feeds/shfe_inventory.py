@@ -2,25 +2,21 @@
 feeds/shfe_inventory.py
 
 Fetches SHFE copper warehouse stocks directly from the Shanghai Futures Exchange.
-Uses the native static HTML data file — no authentication, no JS rendering required.
+URL: https://www.shfe.com.cn/data/tradedata/future/stockdata/dailystock_{YYYYMMDD}/EN/all.html
 
-URL pattern:
-  https://www.shfe.com.cn/data/tradedata/future/stockdata/dailystock_{YYYYMMDD}/EN/all.html
+HTML structure (key insight):
+  - Each metal has its own <table class="el-table_table">
+  - Metal name is in a <tr class="special_row_type"> row
+  - Region cells use rowspan — region name only appears on first warehouse row
+  - Subtotal rows have class "isTotal" with 3 tds: label, value, change
+  - Total rows use colspan="2" for label, then value, change
 
-Data: per-warehouse breakdown with regional subtotals and grand total.
-Published daily after SHFE market close (~15:00 CST / 07:00 UTC).
-
-Requires GitHub Secrets:
-  GOOGLE_SERVICE_ACCOUNT_JSON
-
-Sheet tab: SHFE
-Columns:
+Columns written to SHFE tab:
   Date | Report Date | Total Stocks (mt) | Daily Change (mt) |
   Shanghai (mt) | Guangdong (mt) | Jiangsu (mt) | Zhejiang (mt) | Other (mt) | Source
 """
 
 import os
-import re
 import json
 import datetime
 import requests
@@ -47,29 +43,14 @@ HEADERS = {
     "Referer": "https://www.shfe.com.cn/eng/reports/StatisticalData/DailyData/",
 }
 
-# Regions to capture as separate columns (matched against Subtotal rows)
-REGIONS = ["Shanghai", "Guangdong", "Jiangsu", "Zhejiang"]
-
 
 # ── FETCH ─────────────────────────────────────────────────────
 def build_url(date_str):
-    """date_str: YYYYMMDD"""
     return SHFE_URL_TEMPLATE.format(date=date_str)
 
 
-def fetch_for_date(date_str):
-    url = build_url(date_str)
-    print(f"  Fetching: {url}")
-    resp = requests.get(url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    return resp.text
-
-
-def find_latest_date():
-    """
-    Try today and walk back up to 7 days to find the most recent published file.
-    SHFE publishes after market close so today may not be available until ~07:00 UTC.
-    """
+def find_latest_data():
+    """Walk back up to 7 days to find the most recently published file."""
     today = datetime.date.today()
     for delta in range(7):
         d = today - datetime.timedelta(days=delta)
@@ -88,145 +69,96 @@ def find_latest_date():
 
 
 # ── PARSE ─────────────────────────────────────────────────────
+def num(text):
+    """Parse a number string to float, return None on failure."""
+    try:
+        return float(text.strip().replace(",", ""))
+    except (ValueError, AttributeError):
+        return None
+
+
+def find_copper_table(soup):
+    """
+    Find the <table> containing COPPER data.
+    Each metal is in its own table; the metal name is in a special_row_type tr.
+    """
+    for table in soup.find_all("table", class_="el-table_table"):
+        special = table.find("tr", class_="special_row_type")
+        if special:
+            label = special.get_text(strip=True)
+            # Match COPPER but not COPPER(BC)
+            if label.upper().startswith("COPPER") and "BC" not in label.upper():
+                return table
+    return None
+
+
 def parse_copper(html):
     """
-    Parse the all.html file for COPPER section.
-    Returns dict with total, change, and regional subtotals.
+    Parse the COPPER table from the all.html file.
+
+    Row types in the copper table:
+    1. special_row_type  — metal header (COPPER / Unit:Tonne)
+    2. tdBorder (4 tds) — first warehouse in a region: [region, warehouse, value, change]
+       region td has rowspan=N
+    3. tdBorder (3 tds) — continuation warehouses: [warehouse, value, change]
+    4. isTotal (3 tds)  — subtotal: [Subtotal, value, change]
+    5. isTotal with colspan=2 — grand totals: [Total(Tax included), value, change]
     """
     soup = BeautifulSoup(html, "lxml")
-    
-    # The file contains all metals — find the COPPER section
-    # Strategy: look for table rows, find COPPER header, parse until next metal
+
     result = {
-        "total_mt":    None,
-        "change_mt":   None,
-        "regions":     {},
+        "total_mt":  None,
+        "change_mt": None,
+        "regions":   {},
     }
 
-    # Try to find tables
-    tables = soup.find_all("table")
-    print(f"  Found {len(tables)} tables in HTML")
-
-    copper_table = None
-    for table in tables:
-        text = table.get_text()
-        if "COPPER" in text.upper() and "Total" in text:
-            copper_table = table
-            break
-
+    copper_table = find_copper_table(soup)
     if not copper_table:
-        # Fallback: parse raw text
-        return parse_copper_from_text(soup.get_text("\n"))
+        raise ValueError("Could not find COPPER table in HTML")
 
-    rows = copper_table.find_all("tr")
-    in_copper = False
     current_region = None
 
-    for row in rows:
-        cells = [td.get_text(strip=True) for td in row.find_all(["td", "th"])]
-        if len(cells) < 2:
+    for row in copper_table.find_all("tr"):
+        classes = row.get("class", [])
+
+        # Skip the metal header row
+        if "special_row_type" in classes:
             continue
 
-        first = cells[0].strip()
-        
-        # Detect COPPER section start
-        if first.upper() == "COPPER" or (len(cells) > 1 and "COPPER" in first.upper()):
-            in_copper = True
+        tds = row.find_all("td")
+        if not tds:
             continue
 
-        # Detect next metal section (exit copper)
-        if in_copper and first.upper() in [
-            "ALUMINUM", "ZINC", "LEAD", "NICKEL", "TIN", "GOLD", "SILVER",
-            "REBAR", "WIRE ROD", "HOT ROLLED", "STAINLESS", "NATURAL RUBBER",
-            "FUEL OIL", "BITUMEN", "CRUDE OIL"
-        ]:
-            break
-
-        if not in_copper:
+        # ── Grand total rows (colspan=2 on first td) ──────────
+        if tds[0].get("colspan") == "2":
+            label = tds[0].get_text(strip=True)
+            if label == "Total(Tax included)":
+                result["total_mt"]  = num(tds[1].get_text(strip=True))
+                result["change_mt"] = num(tds[2].get_text(strip=True))
+                print(f"  Total(Tax included): {result['total_mt']} mt, change: {result['change_mt']}")
+            # "Total" row is redundant with Tax included — skip
             continue
 
-        # Track current region
-        if first and first not in ("", "Region", "Warehouse", "On Warrant", "Change"):
-            if not first.startswith(",") and "Subtotal" not in first and "Total" not in first:
-                # Check if this looks like a region name (not a warehouse)
-                if len(cells) >= 3 and cells[1] and cells[1] != "0":
-                    current_region = first
-                elif len(cells) >= 1 and cells[1] == "":
-                    current_region = first
-
-        # Parse subtotals by region
-        if "Subtotal" in first or (len(cells) > 1 and "Subtotal" in cells[1]):
-            val = extract_number(cells)
-            chg = extract_number(cells, idx=3)
-            if current_region and val is not None:
+        # ── Subtotal rows (isTotal, 3 tds, no colspan) ────────
+        if "isTotal" in classes and len(tds) == 3:
+            label = tds[0].get_text(strip=True)
+            if label == "Subtotal" and current_region:
+                val = num(tds[1].get_text(strip=True))
+                chg = num(tds[2].get_text(strip=True))
                 result["regions"][current_region] = {"mt": val, "change": chg}
-
-        # Parse grand totals
-        if first == "Total(Tax included)" or (len(cells) > 1 and cells[1] == "Total(Tax included)"):
-            result["total_mt"]  = extract_number(cells)
-            result["change_mt"] = extract_number(cells, idx=3)
-        elif first == "Total" and result["total_mt"] is None:
-            result["total_mt"]  = extract_number(cells)
-            result["change_mt"] = extract_number(cells, idx=3)
-
-    return result
-
-
-def parse_copper_from_text(text):
-    """Fallback text parser matching the TXT export format."""
-    result = {"total_mt": None, "change_mt": None, "regions": {}}
-    
-    lines = text.split("\n")
-    in_copper = False
-    current_region = None
-
-    for line in lines:
-        line = line.strip()
-        parts = [p.strip() for p in line.split(",")]
-
-        if "COPPER" == parts[0].upper():
-            in_copper = True
+                print(f"  Subtotal {current_region}: {val} mt, change: {chg}")
             continue
 
-        if in_copper and parts[0].upper() in [
-            "ALUMINUM", "ZINC", "LEAD", "NICKEL", "TIN", "GOLD", "SILVER"
-        ]:
-            break
-
-        if not in_copper:
+        # ── First warehouse row in a region (4 tds) ───────────
+        if len(tds) == 4:
+            current_region = tds[0].get_text(strip=True)
+            # tds[1]=warehouse, tds[2]=value, tds[3]=change — warehouse row, skip
             continue
 
-        # Region name (non-empty first cell, not a warehouse line)
-        if parts[0] and parts[0] not in ("Region", "Warehouse"):
-            if "Subtotal" not in parts[0] and "Total" not in parts[0]:
-                current_region = parts[0]
-
-        if len(parts) >= 3:
-            if "Subtotal" in parts[0] or (len(parts) > 1 and "Subtotal" in parts[1]):
-                try:
-                    val = float(parts[2].replace(",", ""))
-                    chg = float(parts[3].replace(",", "")) if len(parts) > 3 else None
-                    if current_region:
-                        result["regions"][current_region] = {"mt": val, "change": chg}
-                except ValueError:
-                    pass
-
-            if parts[0] in ("Total(Tax included)", "Total"):
-                try:
-                    result["total_mt"]  = float(parts[2].replace(",", ""))
-                    result["change_mt"] = float(parts[3].replace(",", "")) if len(parts) > 3 else None
-                except ValueError:
-                    pass
+        # ── Continuation warehouse rows (3 tds) ───────────────
+        # warehouse, value, change — nothing to capture at warehouse level
 
     return result
-
-
-def extract_number(cells, idx=2):
-    """Extract float from cells list at given index."""
-    try:
-        return float(cells[idx].replace(",", "").replace("+", ""))
-    except (IndexError, ValueError, AttributeError):
-        return None
 
 
 # ── GOOGLE SHEETS ─────────────────────────────────────────────
@@ -250,7 +182,7 @@ def ensure_headers(tab):
 
 
 def write_to_sheet(date_str, data, tab):
-    today = datetime.date.today().isoformat()
+    today       = datetime.date.today().isoformat()
     report_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
 
     # Duplicate check
@@ -259,14 +191,12 @@ def write_to_sheet(date_str, data, tab):
         print(f"Duplicate: {report_date} already logged. Skipping.")
         return False
 
-    # Regional breakdown
-    regions = data.get("regions", {})
-    shanghai   = regions.get("Shanghai",   {}).get("mt", "")
-    guangdong  = regions.get("Guangdong",  {}).get("mt", "")
-    jiangsu    = regions.get("Jiangsu",    {}).get("mt", "")
-    zhejiang   = regions.get("Zhejiang",   {}).get("mt", "")
+    regions   = data.get("regions", {})
+    shanghai  = regions.get("Shanghai",  {}).get("mt", "")
+    guangdong = regions.get("Guangdong", {}).get("mt", "")
+    jiangsu   = regions.get("Jiangsu",   {}).get("mt", "")
+    zhejiang  = regions.get("Zhejiang",  {}).get("mt", "")
 
-    # "Other" = total minus known regions
     known = sum(v for v in [shanghai, guangdong, jiangsu, zhejiang] if isinstance(v, float))
     other = round(data["total_mt"] - known, 0) if data["total_mt"] and known else ""
 
@@ -292,9 +222,9 @@ def main():
 
     try:
         print("\n[1] Finding latest SHFE data file...")
-        date_str, html = find_latest_date()
+        date_str, html = find_latest_data()
 
-        print(f"\n[2] Parsing copper section for {date_str}...")
+        print(f"\n[2] Parsing copper table for {date_str}...")
         data = parse_copper(html)
 
         print(f"\nParsed results:")
@@ -303,7 +233,7 @@ def main():
         print(f"  Regions:    {data['regions']}")
 
         if data["total_mt"] is None:
-            raise ValueError("Parse failed — total_mt is None. Check HTML structure.")
+            raise ValueError("Parse failed — total_mt is None")
 
         print(f"\n[3] Writing to Google Sheets...")
         client = get_sheet_client()
@@ -322,3 +252,21 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
