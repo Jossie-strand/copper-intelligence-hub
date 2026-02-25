@@ -1,12 +1,9 @@
 """
 feeds/comex_inventory.py
-Fetches COMEX Copper Vault Inventory XLS from CME Group.
-Captures aggregate totals AND per-warehouse breakdown.
 
-Fixed issues (2026-02-25):
-  - Date parsing was storing full string e.g. "Report Date: 2/24/2026"
-    instead of just "2/24/2026"
-  - Warehouse total rows label is "Total" (mixed case) not "TOTAL"
+Fetches COMEX Copper Vault Inventory XLS from CME Group,
+parses registered/eligible/total, converts to metric tonnes,
+writes to COMEX tab and updates the shared Dashboard.
 """
 
 import os
@@ -16,42 +13,45 @@ import requests
 import xlrd
 import gspread
 from google.oauth2.service_account import Credentials
+from dashboard import write_exchange, ensure_headers
 
-CME_URL    = "https://www.cmegroup.com/delivery_reports/Copper_Stocks.xls"
-SHEET_NAME = "3-exchange-inventory-tracker"
-TAB_COMEX  = "COMEX"
-TAB_DASH   = "Dashboard"
-
-WAREHOUSES = [
-    "BALTIMORE", "DETROIT", "EL PASO", "NEW ORLEANS",
-    "OWENSBORO", "SALT LAKE CITY", "TUCSON"
-]
+# ── CONFIG ────────────────────────────────────────────────────
+CME_URL       = "https://www.cmegroup.com/delivery_reports/Copper_Stocks.xls"
+SHEET_NAME    = "3-exchange-inventory-tracker"
+TAB_COMEX     = "COMEX"
+TAB_DASHBOARD = "Dashboard"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
 
+ST_TO_MT = 0.907185
+
+COMEX_HEADERS = [
+    "Date", "Report Date", "Activity Date",
+    "Total Registered (st)", "Total Eligible (st)", "Total (st)", "Total (mt)",
+    "Source"
+]
+
+
+# ── FETCH ─────────────────────────────────────────────────────
 def fetch_xls():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-        "Accept":     "application/vnd.ms-excel,*/*",
-        "Referer":    "https://www.cmegroup.com/"
+        "Accept": "application/vnd.ms-excel,*/*",
+        "Referer": "https://www.cmegroup.com/"
     }
     resp = requests.get(CME_URL, headers=headers, timeout=30)
     resp.raise_for_status()
     print(f"Fetched XLS: HTTP {resp.status_code}, {len(resp.content)} bytes")
     return resp.content
 
+
+# ── PARSE ─────────────────────────────────────────────────────
 def parse_xls(content):
     wb = xlrd.open_workbook(file_contents=content)
     ws = wb.sheet_by_index(0)
-
-    all_rows = []
-    for r in range(ws.nrows):
-        row = [str(ws.cell_value(r, c)).strip() for c in range(ws.ncols)]
-        all_rows.append(row)
-        print(f"Row {r:02d}: {row}")
 
     result = {
         "report_date":   "",
@@ -60,134 +60,144 @@ def parse_xls(content):
         "eligible_st":   None,
         "total_st":      None,
         "total_mt":      None,
-        "warehouses":    {w: {"prev": None, "today": None} for w in WAREHOUSES}
+        "registered_mt": None,
+        "eligible_mt":   None,
     }
 
-    current_warehouse = None
+    all_rows = []
+    for row_idx in range(ws.nrows):
+        row_vals = [str(ws.cell_value(row_idx, col)).strip() for col in range(ws.ncols)]
+        all_rows.append(row_vals)
+        if row_idx < 20:
+            print(f"Row {row_idx}: {row_vals}")
 
+    # Dates
     for row in all_rows:
-        label     = row[0].strip()        # preserve original case for "Total" match
-        label_up  = label.upper()
+        joined = " ".join(row)
+        if "Report Date" in joined and not result["report_date"]:
+            for cell in row:
+                if "/" in cell and len(cell) >= 8:
+                    result["report_date"] = cell.strip()
+                    break
+        if "Activity Date" in joined and not result["activity_date"]:
+            for cell in row:
+                clean = cell.split(":")[-1].strip()
+                if "/" in clean and len(clean) >= 8:
+                    result["activity_date"] = clean
+                    break
 
-        # ── Dates: extract just the date portion after the colon ──
-        # e.g. "Report Date: 2/24/2026" → "2/24/2026"
-        if "REPORT DATE:" in row[6].upper():
-            result["report_date"] = row[6].split(":")[-1].strip()
-        if "ACTIVITY DATE:" in row[6].upper():
-            result["activity_date"] = row[6].split(":")[-1].strip()
+    # Totals
+    for row in all_rows:
+        joined = " ".join(row).upper()
+        nums = []
+        for c in row:
+            clean = c.replace(",", "").replace(".", "")
+            if clean.lstrip("-").isdigit():
+                try:
+                    v = float(c.replace(",", ""))
+                    if abs(v) >= 100:
+                        nums.append(v)
+                except ValueError:
+                    pass
 
-        # ── Warehouse section header ──
-        for wh in WAREHOUSES:
-            if label_up == wh:
-                current_warehouse = wh
-                print(f"  Found warehouse section: {wh}")
-                break
-
-        # ── Per-warehouse Total row (label is "Total", mixed case) ──
-        if current_warehouse and label == "Total":
-            prev  = safe_float(row[2])
-            today = safe_float(row[7])
-            result["warehouses"][current_warehouse]["prev"]  = prev
-            result["warehouses"][current_warehouse]["today"] = today
-            print(f"  → {current_warehouse}: prev={prev}, today={today}")
-            current_warehouse = None  # reset after capturing
-
-        # ── Aggregate totals (col 7 = TOTAL TODAY) ──
-        if "TOTAL REGISTERED" in label_up:
-            result["registered_st"] = safe_float(row[7])
+        if "TOTAL" in joined and "REGISTERED" in joined and nums:
+            result["registered_st"] = nums[-1]
             print(f"  → registered_st = {result['registered_st']}")
 
-        if "TOTAL ELIGIBLE" in label_up:
-            result["eligible_st"] = safe_float(row[7])
+        if "TOTAL" in joined and "ELIGIBLE" in joined and nums:
+            result["eligible_st"] = nums[-1]
             print(f"  → eligible_st = {result['eligible_st']}")
 
-        if label_up == "TOTAL COPPER":
-            result["total_st"] = safe_float(row[7])
+        if "TOTAL" in joined and "COPPER" in joined and nums:
+            result["total_st"] = nums[-1]
             print(f"  → total_st = {result['total_st']}")
 
-    # Fallback derive total
     if result["total_st"] is None and result["registered_st"] and result["eligible_st"]:
         result["total_st"] = result["registered_st"] + result["eligible_st"]
 
     if result["total_st"]:
-        result["total_mt"] = round(result["total_st"] * 0.907185)
+        result["total_mt"] = round(result["total_st"] * ST_TO_MT)
+    if result["registered_st"]:
+        result["registered_mt"] = round(result["registered_st"] * ST_TO_MT)
+    if result["eligible_st"]:
+        result["eligible_mt"] = round(result["eligible_st"] * ST_TO_MT)
 
     return result
 
 
-def safe_float(val):
-    try:
-        v = float(str(val).replace(",", ""))
-        return v if v >= 0 else None
-    except (ValueError, TypeError):
-        return None
-
-
+# ── GOOGLE SHEETS ─────────────────────────────────────────────
 def get_sheet_client():
     creds_dict = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     return gspread.authorize(creds)
 
 
-def ensure_headers(comex_tab):
-    first = comex_tab.row_values(1)
+def ensure_comex_headers(tab):
+    first = tab.row_values(1)
     if not first or first[0] != "Date":
-        headers = [
-            "Date", "Report Date", "Activity Date",
-            "Registered (st)", "Eligible (st)", "Total (st)", "Total (mt)",
-            "BALTIMORE Prev Total",      "BALTIMORE Total Today",
-            "DETROIT Prev Total",        "DETROIT Total Today",
-            "EL PASO Prev Total",        "EL PASO Total Today",
-            "NEW ORLEANS Prev Total",    "NEW ORLEANS Total Today",
-            "OWENSBORO Prev Total",      "OWENSBORO Total Today",
-            "SALT LAKE CITY Prev Total", "SALT LAKE CITY Total Today",
-            "TUCSON Prev Total",         "TUCSON Total Today",
-            "Source"
-        ]
-        comex_tab.insert_row(headers, 1)
-        print("✅ Headers written to COMEX tab")
+        tab.insert_row(COMEX_HEADERS, 1)
+        print("✅ COMEX headers written")
 
 
-def write_to_sheet(data, comex_tab, dash_tab):
+def calc_comex_change(tab, total_mt):
+    """Delta from the most recent prior row's Total (mt) — col G (index 6, col 7)."""
+    if total_mt is None:
+        return None
+    all_vals = tab.col_values(7)  # Total (mt) = col G
+    for v in reversed(all_vals[1:]):
+        try:
+            prev = float(str(v).replace(",", ""))
+            return round(total_mt - prev, 0)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def write_to_sheet(data):
+    client    = get_sheet_client()
+    book      = client.open(SHEET_NAME)
+    comex_tab = book.worksheet(TAB_COMEX)
+    dash_tab  = book.worksheet(TAB_DASHBOARD)
+
     today = datetime.date.today().isoformat()
 
-    # Duplicate check — compare clean date strings only
-    existing = comex_tab.col_values(3)  # Activity Date column
+    # Duplicate check on activity_date (col C = col 3)
+    existing = comex_tab.col_values(3)
     if data["activity_date"] and data["activity_date"] in existing:
-        print(f"Duplicate: {data['activity_date']} already logged. Skipping.")
+        print(f"Duplicate: activity_date {data['activity_date']} already in sheet. Skipping.")
         return
 
-    wh = data["warehouses"]
+    ensure_comex_headers(comex_tab)
+
+    change_mt = calc_comex_change(comex_tab, data["total_mt"])
 
     comex_row = [
         today,
         data["report_date"],
         data["activity_date"],
-        data["registered_st"]            or "",
-        data["eligible_st"]              or "",
-        data["total_st"]                 or "",
-        data["total_mt"]                 or "",
-        wh["BALTIMORE"]["prev"]          or "", wh["BALTIMORE"]["today"]      or "",
-        wh["DETROIT"]["prev"]            or "", wh["DETROIT"]["today"]        or "",
-        wh["EL PASO"]["prev"]            or "", wh["EL PASO"]["today"]        or "",
-        wh["NEW ORLEANS"]["prev"]        or "", wh["NEW ORLEANS"]["today"]    or "",
-        wh["OWENSBORO"]["prev"]          or "", wh["OWENSBORO"]["today"]      or "",
-        wh["SALT LAKE CITY"]["prev"]     or "", wh["SALT LAKE CITY"]["today"] or "",
-        wh["TUCSON"]["prev"]             or "", wh["TUCSON"]["today"]         or "",
+        data["registered_st"] or "",
+        data["eligible_st"]   or "",
+        data["total_st"]      or "",
+        data["total_mt"]      or "",
         CME_URL
     ]
-
     comex_tab.append_row(comex_row, value_input_option="USER_ENTERED")
-    print(f"✅ Wrote {len(comex_row)} columns to COMEX tab")
+    print(f"✅ COMEX tab: {data['total_mt']} mt | registered {data['registered_mt']} mt | change {change_mt} mt")
 
-    dash_tab.append_row([
-        today, data["report_date"],
-        data["registered_st"] or "", data["eligible_st"] or "",
-        data["total_st"] or "", data["total_mt"] or "", ""
-    ], value_input_option="USER_ENTERED")
-    print("✅ Wrote to Dashboard tab")
+    # Dashboard — pass registered + eligible as extras
+    ensure_headers(dash_tab)
+    write_exchange(
+        dash_tab, today, "COMEX",
+        total_mt=data["total_mt"],
+        change_mt=change_mt,
+        extras={
+            "registered": data["registered_mt"],
+            "eligible":   data["eligible_mt"],
+        }
+    )
 
 
+# ── MAIN ──────────────────────────────────────────────────────
 def main():
     print("=" * 60)
     print(f"COMEX Copper Feed — {datetime.datetime.utcnow().isoformat()}Z")
@@ -196,32 +206,19 @@ def main():
     try:
         content = fetch_xls()
         data    = parse_xls(content)
-
-        print(f"\nParsed summary:")
-        print(f"  Report Date:   {data['report_date']}")
-        print(f"  Activity Date: {data['activity_date']}")
-        print(f"  Registered:    {data['registered_st']} st")
-        print(f"  Eligible:      {data['eligible_st']} st")
-        print(f"  Total:         {data['total_st']} st / {data['total_mt']} mt")
-        for wh in WAREHOUSES:
-            print(f"  {wh}: prev={data['warehouses'][wh]['prev']} today={data['warehouses'][wh]['today']}")
+        print(f"\nParsed: total_st={data['total_st']}, total_mt={data['total_mt']}, "
+              f"registered_mt={data['registered_mt']}, eligible_mt={data['eligible_mt']}")
 
         if not data["total_st"]:
             raise ValueError("Parse failed — total_st is None")
 
-        client    = get_sheet_client()
-        book      = client.open(SHEET_NAME)
-        comex_tab = book.worksheet(TAB_COMEX)
-        dash_tab  = book.worksheet(TAB_DASH)
-
-        ensure_headers(comex_tab)
-        write_to_sheet(data, comex_tab, dash_tab)
-
+        write_to_sheet(data)
         print("\n✅ Done.")
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
         raise
+
 
 if __name__ == "__main__":
     main()
