@@ -1,19 +1,10 @@
 """
 feeds/shfe_inventory.py
 
-Fetches SHFE copper warehouse stocks directly from the Shanghai Futures Exchange.
-URL: https://www.shfe.com.cn/data/tradedata/future/stockdata/dailystock_{YYYYMMDD}/EN/all.html
+Fetches SHFE copper warehouse stocks from Shanghai Futures Exchange.
+URL pattern: dailystock_{YYYYMMDD}/EN/all.html
 
-HTML structure (key insight):
-  - Each metal has its own <table class="el-table_table">
-  - Metal name is in a <tr class="special_row_type"> row
-  - Region cells use rowspan — region name only appears on first warehouse row
-  - Subtotal rows have class "isTotal" with 3 tds: label, value, change
-  - Total rows use colspan="2" for label, then value, change
-
-Columns written to SHFE tab:
-  Date | Report Date | Total Stocks (mt) | Daily Change (mt) |
-  Shanghai (mt) | Guangdong (mt) | Jiangsu (mt) | Zhejiang (mt) | Other (mt) | Source
+Writes to SHFE tab and updates shared Dashboard.
 """
 
 import os
@@ -23,21 +14,30 @@ import requests
 from bs4 import BeautifulSoup
 import gspread
 from google.oauth2.service_account import Credentials
+from dashboard import write_exchange, ensure_headers
 
 # ── CONFIG ────────────────────────────────────────────────────
 SHFE_URL_TEMPLATE = (
     "https://www.shfe.com.cn/data/tradedata/future/stockdata/"
     "dailystock_{date}/EN/all.html"
 )
-SHEET_NAME = "3-exchange-inventory-tracker"
-TAB_SHFE   = "SHFE"
+SHEET_NAME    = "3-exchange-inventory-tracker"
+TAB_SHFE      = "SHFE"
+TAB_DASHBOARD = "Dashboard"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
 
-HEADERS = {
+SHFE_HEADERS = [
+    "Date", "Report Date",
+    "Total Stocks (mt)", "Daily Change (mt)",
+    "Shanghai (mt)", "Guangdong (mt)", "Jiangsu (mt)", "Zhejiang (mt)",
+    "Other Regions (mt)", "Source"
+]
+
+FETCH_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
     "Accept": "text/html,application/xhtml+xml,*/*",
     "Referer": "https://www.shfe.com.cn/eng/reports/StatisticalData/DailyData/",
@@ -50,14 +50,13 @@ def build_url(date_str):
 
 
 def find_latest_data():
-    """Walk back up to 7 days to find the most recently published file."""
     today = datetime.date.today()
     for delta in range(7):
         d = today - datetime.timedelta(days=delta)
         date_str = d.strftime("%Y%m%d")
         url = build_url(date_str)
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=15)
+            resp = requests.get(url, headers=FETCH_HEADERS, timeout=15)
             if resp.status_code == 200 and len(resp.content) > 500:
                 print(f"  Found data for {date_str}")
                 return date_str, resp.text
@@ -70,7 +69,6 @@ def find_latest_data():
 
 # ── PARSE ─────────────────────────────────────────────────────
 def num(text):
-    """Parse a number string to float, return None on failure."""
     try:
         return float(text.strip().replace(",", ""))
     except (ValueError, AttributeError):
@@ -78,39 +76,18 @@ def num(text):
 
 
 def find_copper_table(soup):
-    """
-    Find the <table> containing COPPER data.
-    Each metal is in its own table; the metal name is in a special_row_type tr.
-    """
     for table in soup.find_all("table", class_="el-table_table"):
         special = table.find("tr", class_="special_row_type")
         if special:
-            label = special.get_text(strip=True)
-            # Match COPPER but not COPPER(BC)
-            if label.upper().startswith("COPPER") and "BC" not in label.upper():
+            label = special.get_text(strip=True).upper()
+            if label.startswith("COPPER") and "BC" not in label:
                 return table
     return None
 
 
 def parse_copper(html):
-    """
-    Parse the COPPER table from the all.html file.
-
-    Row types in the copper table:
-    1. special_row_type  — metal header (COPPER / Unit:Tonne)
-    2. tdBorder (4 tds) — first warehouse in a region: [region, warehouse, value, change]
-       region td has rowspan=N
-    3. tdBorder (3 tds) — continuation warehouses: [warehouse, value, change]
-    4. isTotal (3 tds)  — subtotal: [Subtotal, value, change]
-    5. isTotal with colspan=2 — grand totals: [Total(Tax included), value, change]
-    """
     soup = BeautifulSoup(html, "lxml")
-
-    result = {
-        "total_mt":  None,
-        "change_mt": None,
-        "regions":   {},
-    }
+    result = {"total_mt": None, "change_mt": None, "regions": {}}
 
     copper_table = find_copper_table(soup)
     if not copper_table:
@@ -120,8 +97,6 @@ def parse_copper(html):
 
     for row in copper_table.find_all("tr"):
         classes = row.get("class", [])
-
-        # Skip the metal header row
         if "special_row_type" in classes:
             continue
 
@@ -129,34 +104,29 @@ def parse_copper(html):
         if not tds:
             continue
 
-        # ── Grand total rows (colspan=2 on first td) ──────────
+        # Grand total (colspan=2 on first td)
         if tds[0].get("colspan") == "2":
             label = tds[0].get_text(strip=True)
             if label == "Total(Tax included)":
                 result["total_mt"]  = num(tds[1].get_text(strip=True))
                 result["change_mt"] = num(tds[2].get_text(strip=True))
-                print(f"  Total(Tax included): {result['total_mt']} mt, change: {result['change_mt']}")
-            # "Total" row is redundant with Tax included — skip
+                print(f"  Total: {result['total_mt']} mt, change: {result['change_mt']}")
             continue
 
-        # ── Subtotal rows (isTotal, 3 tds, no colspan) ────────
+        # Subtotal rows
         if "isTotal" in classes and len(tds) == 3:
             label = tds[0].get_text(strip=True)
             if label == "Subtotal" and current_region:
                 val = num(tds[1].get_text(strip=True))
                 chg = num(tds[2].get_text(strip=True))
                 result["regions"][current_region] = {"mt": val, "change": chg}
-                print(f"  Subtotal {current_region}: {val} mt, change: {chg}")
+                print(f"  {current_region}: {val} mt")
             continue
 
-        # ── First warehouse row in a region (4 tds) ───────────
+        # First warehouse row in a new region (4 tds)
         if len(tds) == 4:
             current_region = tds[0].get_text(strip=True)
-            # tds[1]=warehouse, tds[2]=value, tds[3]=change — warehouse row, skip
             continue
-
-        # ── Continuation warehouse rows (3 tds) ───────────────
-        # warehouse, value, change — nothing to capture at warehouse level
 
     return result
 
@@ -168,28 +138,28 @@ def get_sheet_client():
     return gspread.authorize(creds)
 
 
-def ensure_headers(tab):
+def ensure_shfe_headers(tab):
     first = tab.row_values(1)
     if not first or first[0] != "Date":
-        headers = [
-            "Date", "Report Date",
-            "Total Stocks (mt)", "Daily Change (mt)",
-            "Shanghai (mt)", "Guangdong (mt)", "Jiangsu (mt)", "Zhejiang (mt)",
-            "Other Regions (mt)", "Source"
-        ]
-        tab.insert_row(headers, 1)
-        print("✅ Headers written")
+        tab.insert_row(SHFE_HEADERS, 1)
+        print("✅ SHFE headers written")
 
 
-def write_to_sheet(date_str, data, tab):
+def write_to_sheet(date_str, data):
+    client   = get_sheet_client()
+    book     = client.open(SHEET_NAME)
+    shfe_tab = book.worksheet(TAB_SHFE)
+    dash_tab = book.worksheet(TAB_DASHBOARD)
+
     today       = datetime.date.today().isoformat()
     report_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
 
-    # Duplicate check
-    existing = tab.col_values(2)
+    existing = shfe_tab.col_values(2)
     if report_date in existing:
         print(f"Duplicate: {report_date} already logged. Skipping.")
-        return False
+        return
+
+    ensure_shfe_headers(shfe_tab)
 
     regions   = data.get("regions", {})
     shanghai  = regions.get("Shanghai",  {}).get("mt", "")
@@ -200,18 +170,19 @@ def write_to_sheet(date_str, data, tab):
     known = sum(v for v in [shanghai, guangdong, jiangsu, zhejiang] if isinstance(v, float))
     other = round(data["total_mt"] - known, 0) if data["total_mt"] and known else ""
 
-    row = [
-        today,
-        report_date,
+    shfe_row = [
+        today, report_date,
         data["total_mt"]  or "",
         data["change_mt"] or "",
         shanghai, guangdong, jiangsu, zhejiang, other,
         build_url(date_str)
     ]
+    shfe_tab.append_row(shfe_row, value_input_option="USER_ENTERED")
+    print(f"✅ SHFE tab: {data['total_mt']} mt | change {data['change_mt']} mt")
 
-    tab.append_row(row, value_input_option="USER_ENTERED")
-    print(f"✅ Wrote: {row}")
-    return True
+    # Dashboard
+    ensure_headers(dash_tab)
+    write_exchange(dash_tab, today, "SHFE", data["total_mt"], data["change_mt"])
 
 
 # ── MAIN ──────────────────────────────────────────────────────
@@ -227,21 +198,14 @@ def main():
         print(f"\n[2] Parsing copper table for {date_str}...")
         data = parse_copper(html)
 
-        print(f"\nParsed results:")
-        print(f"  Total:      {data['total_mt']} mt")
-        print(f"  Change:     {data['change_mt']} mt")
-        print(f"  Regions:    {data['regions']}")
+        print(f"\nParsed: total={data['total_mt']} mt, change={data['change_mt']} mt")
+        print(f"Regions: {data['regions']}")
 
         if data["total_mt"] is None:
             raise ValueError("Parse failed — total_mt is None")
 
         print(f"\n[3] Writing to Google Sheets...")
-        client = get_sheet_client()
-        book   = client.open(SHEET_NAME)
-        tab    = book.worksheet(TAB_SHFE)
-
-        ensure_headers(tab)
-        write_to_sheet(date_str, data, tab)
+        write_to_sheet(date_str, data)
 
         print("\n✅ Done.")
 
@@ -252,21 +216,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
