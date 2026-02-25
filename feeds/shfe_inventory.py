@@ -154,12 +154,10 @@ def write_to_sheet(date_str, data):
     today       = datetime.date.today().isoformat()
     report_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
 
-    existing = shfe_tab.col_values(2)
-    if report_date in existing:
-        print(f"Duplicate: {report_date} already logged. Skipping.")
-        return
-
     ensure_shfe_headers(shfe_tab)
+
+    existing = shfe_tab.col_values(2)
+    already_logged = report_date in existing
 
     regions   = data.get("regions", {})
     shanghai  = regions.get("Shanghai",  {}).get("mt", "")
@@ -170,17 +168,20 @@ def write_to_sheet(date_str, data):
     known = sum(v for v in [shanghai, guangdong, jiangsu, zhejiang] if isinstance(v, float))
     other = round(data["total_mt"] - known, 0) if data["total_mt"] and known else ""
 
-    shfe_row = [
-        today, report_date,
-        data["total_mt"]  or "",
-        data["change_mt"] or "",
-        shanghai, guangdong, jiangsu, zhejiang, other,
-        build_url(date_str)
-    ]
-    shfe_tab.append_row(shfe_row, value_input_option="USER_ENTERED")
-    print(f"✅ SHFE tab: {data['total_mt']} mt | change {data['change_mt']} mt")
+    if already_logged:
+        print(f"Duplicate: {report_date} already in SHFE tab. Skipping tab write.")
+    else:
+        shfe_row = [
+            today, report_date,
+            data["total_mt"]  or "",
+            data["change_mt"] or "",
+            shanghai, guangdong, jiangsu, zhejiang, other,
+            build_url(date_str)
+        ]
+        shfe_tab.append_row(shfe_row, value_input_option="USER_ENTERED")
+        print(f"✅ SHFE tab: {data['total_mt']} mt | change {data['change_mt']} mt")
 
-    # Dashboard
+    # Dashboard always runs — idempotent update
     ensure_headers(dash_tab)
     write_exchange(dash_tab, today, "SHFE", data["total_mt"], data["change_mt"])
 
