@@ -130,24 +130,25 @@ def write_to_sheet(data):
 
     today = datetime.date.today().isoformat()
 
-    existing = lme_tab.col_values(2)
-    if data["report_date"] and data["report_date"] in existing:
-        print(f"Duplicate: {data['report_date']} already logged. Skipping.")
-        return
-
     ensure_lme_headers(lme_tab)
 
-    lme_row = [
-        today,
-        data["report_date"],
-        data["total_mt"]  or "",
-        data["change_mt"] or "",
-        WESTMETALL_URL
-    ]
-    lme_tab.append_row(lme_row, value_input_option="USER_ENTERED")
-    print(f"✅ LME tab: {data['total_mt']} mt | change {data['change_mt']} mt")
+    existing = lme_tab.col_values(2)
+    already_logged = data["report_date"] and data["report_date"] in existing
 
-    # Dashboard — no extras; cancelled warrants col is preserved (manual)
+    if already_logged:
+        print(f"Duplicate: {data['report_date']} already in LME tab. Skipping tab write.")
+    else:
+        lme_row = [
+            today,
+            data["report_date"],
+            data["total_mt"]  or "",
+            data["change_mt"] or "",
+            WESTMETALL_URL
+        ]
+        lme_tab.append_row(lme_row, value_input_option="USER_ENTERED")
+        print(f"✅ LME tab: {data['total_mt']} mt | change {data['change_mt']} mt")
+
+    # Dashboard always runs — idempotent update
     ensure_headers(dash_tab)
     write_exchange(dash_tab, today, "LME", data["total_mt"], data["change_mt"])
 
