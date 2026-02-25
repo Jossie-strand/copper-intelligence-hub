@@ -161,30 +161,31 @@ def write_to_sheet(data):
 
     today = datetime.date.today().isoformat()
 
+    ensure_comex_headers(comex_tab)
+
     # Duplicate check on activity_date (col C = col 3)
     existing = comex_tab.col_values(3)
-    if data["activity_date"] and data["activity_date"] in existing:
-        print(f"Duplicate: activity_date {data['activity_date']} already in sheet. Skipping.")
-        return
-
-    ensure_comex_headers(comex_tab)
+    already_logged = data["activity_date"] and data["activity_date"] in existing
 
     change_mt = calc_comex_change(comex_tab, data["total_mt"])
 
-    comex_row = [
-        today,
-        data["report_date"],
-        data["activity_date"],
-        data["registered_st"] or "",
-        data["eligible_st"]   or "",
-        data["total_st"]      or "",
-        data["total_mt"]      or "",
-        CME_URL
-    ]
-    comex_tab.append_row(comex_row, value_input_option="USER_ENTERED")
-    print(f"✅ COMEX tab: {data['total_mt']} mt | registered {data['registered_mt']} mt | change {change_mt} mt")
+    if already_logged:
+        print(f"Duplicate: activity_date {data['activity_date']} already in COMEX tab. Skipping tab write.")
+    else:
+        comex_row = [
+            today,
+            data["report_date"],
+            data["activity_date"],
+            data["registered_st"] or "",
+            data["eligible_st"]   or "",
+            data["total_st"]      or "",
+            data["total_mt"]      or "",
+            CME_URL
+        ]
+        comex_tab.append_row(comex_row, value_input_option="USER_ENTERED")
+        print(f"✅ COMEX tab: {data['total_mt']} mt | registered {data['registered_mt']} mt | change {change_mt} mt")
 
-    # Dashboard — pass registered + eligible as extras
+    # Dashboard always runs — idempotent update
     ensure_headers(dash_tab)
     write_exchange(
         dash_tab, today, "COMEX",
