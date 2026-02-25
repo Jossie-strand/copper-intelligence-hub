@@ -63,7 +63,7 @@ jobs:
           LME_PASSWORD: ${{ secrets.LME_PASSWORD }}
 
   # ── SHFE INVENTORY ────────────────────────────
- shfe-inventory:
+  shfe-inventory:
     name: SHFE Copper Inventory
     runs-on: ubuntu-latest
     timeout-minutes: 10
