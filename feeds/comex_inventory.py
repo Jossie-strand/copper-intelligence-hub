@@ -2,24 +2,24 @@
 feeds/comex_inventory.py
 
 Fetches COMEX Copper Vault Inventory XLS from CME Group.
-Parses per-warehouse registered/eligible/total (prev + today),
-writes full detail to COMEX tab and updates shared Dashboard.
+CME serves old-format binary .xls — parsed with xlrd.
 
-XLS structure (cols 0-8):
-  Col 0: Label (warehouse name, Registered, Eligible, Total, grand totals)
-  Col 2: Prev Total (st)
-  Col 3: Received (st)
-  Col 4: Withdrawn (st)
-  Col 5: Net Change (st)
-  Col 6: Adjustment (st)
-  Col 7: Total Today (st)
+COMEX tab columns:
+  Date, Report Date, Activity Date,
+  Registered (st), Eligible (st), Total (st), Total (mt),
+  Per warehouse (7x): Reg Prev, Reg Today, Elig Prev, Elig Today, Total Prev, Total Today,
+  Source
+
+XLS structure (0-based cols):
+  0: Label  2: Prev Total  3: Received  4: Withdrawn  5: Net Change  6: Adjustment  7: Total Today
 """
 
 import os
+import io
 import json
 import datetime
 import requests
-import openpyxl
+import xlrd
 import gspread
 from google.oauth2.service_account import Credentials
 from dashboard import write_exchange, ensure_headers
@@ -42,17 +42,31 @@ WAREHOUSES = [
     "NEW ORLEANS", "OWENSBORO", "SALT LAKE CITY", "TUCSON"
 ]
 
-# COMEX tab headers — totals + per-warehouse prev/today for registered, eligible, total
 COMEX_HEADERS = [
     "Date", "Report Date", "Activity Date",
     "Registered (st)", "Eligible (st)", "Total (st)", "Total (mt)",
-    "BALTIMORE Prev Total", "BALTIMORE Total Today",
-    "DETROIT Prev Total", "DETROIT Total Today",
-    "EL PASO Prev Total", "EL PASO Total Today",
-    "NEW ORLEANS Prev Total", "NEW ORLEANS Total Today",
-    "OWENSBORO Prev Total", "OWENSBORO Total Today",
-    "SALT LAKE CITY Prev Total", "SALT LAKE CITY Total Today",
-    "TUCSON Prev Total", "TUCSON Total Today",
+    # Per warehouse: Reg Prev, Reg Today, Elig Prev, Elig Today, Total Prev, Total Today
+    "BALTIMORE Reg Prev", "BALTIMORE Reg Today",
+    "BALTIMORE Elig Prev", "BALTIMORE Elig Today",
+    "BALTIMORE Total Prev", "BALTIMORE Total Today",
+    "DETROIT Reg Prev", "DETROIT Reg Today",
+    "DETROIT Elig Prev", "DETROIT Elig Today",
+    "DETROIT Total Prev", "DETROIT Total Today",
+    "EL PASO Reg Prev", "EL PASO Reg Today",
+    "EL PASO Elig Prev", "EL PASO Elig Today",
+    "EL PASO Total Prev", "EL PASO Total Today",
+    "NEW ORLEANS Reg Prev", "NEW ORLEANS Reg Today",
+    "NEW ORLEANS Elig Prev", "NEW ORLEANS Elig Today",
+    "NEW ORLEANS Total Prev", "NEW ORLEANS Total Today",
+    "OWENSBORO Reg Prev", "OWENSBORO Reg Today",
+    "OWENSBORO Elig Prev", "OWENSBORO Elig Today",
+    "OWENSBORO Total Prev", "OWENSBORO Total Today",
+    "SALT LAKE CITY Reg Prev", "SALT LAKE CITY Reg Today",
+    "SALT LAKE CITY Elig Prev", "SALT LAKE CITY Elig Today",
+    "SALT LAKE CITY Total Prev", "SALT LAKE CITY Total Today",
+    "TUCSON Reg Prev", "TUCSON Reg Today",
+    "TUCSON Elig Prev", "TUCSON Elig Today",
+    "TUCSON Total Prev", "TUCSON Total Today",
     "Source"
 ]
 
@@ -71,29 +85,20 @@ def fetch_xls():
 
 
 # ── PARSE ─────────────────────────────────────────────────────
-def _cell(ws, row_idx, col_idx):
-    """Safe cell reader — returns value or None."""
-    try:
-        val = ws.cell(row=row_idx + 1, column=col_idx + 1).value
-        return val
-    except Exception:
-        return None
-
-
 def _num(val):
-    """Convert cell to float, None if blank/text."""
+    """Convert xlrd cell value to float, None if blank/text."""
     if val is None or val == "":
         return None
     try:
-        return float(val)
+        f = float(val)
+        return f if f != 0.0 or val == 0 else f
     except (ValueError, TypeError):
         return None
 
 
 def parse_xls(content):
-    import io
-    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-    ws = wb.active
+    wb = xlrd.open_workbook(file_contents=content)
+    ws = wb.sheet_by_index(0)
 
     result = {
         "report_date":   "",
@@ -105,56 +110,59 @@ def parse_xls(content):
         "registered_mt": None,
         "eligible_mt":   None,
         "warehouses": {
-            wh: {"reg_prev": None, "reg_today": None,
-                 "elig_prev": None, "elig_today": None,
-                 "total_prev": None, "total_today": None}
+            wh: {
+                "reg_prev": None,   "reg_today": None,
+                "elig_prev": None,  "elig_today": None,
+                "total_prev": None, "total_today": None,
+            }
             for wh in WAREHOUSES
         }
     }
 
-    rows = list(ws.iter_rows(values_only=True))
+    # Read all rows as lists of string values
+    rows = []
+    for i in range(ws.nrows):
+        row = [str(ws.cell_value(i, c)).strip() for c in range(ws.ncols)]
+        rows.append(row)
+        if i < 20:
+            print(f"Row {i}: {row}")
 
-    # Log first 20 rows for debugging
-    for i, row in enumerate(rows[:20]):
-        print(f"Row {i}: {list(row)}")
+    current_wh = None
 
-    current_warehouse = None
+    for row in rows:
+        label = row[0].upper()
 
-    for i, row in enumerate(rows):
-        label = str(row[0]).strip().upper() if row[0] else ""
+        # ── Dates ────────────────────────────────────────────
+        # They appear in col 6: "Report Date: 2/24/2026"
+        for cell in row:
+            if "REPORT DATE" in cell.upper() and "/" in cell:
+                result["report_date"] = cell.split(":")[-1].strip()
+            if "ACTIVITY DATE" in cell.upper() and "/" in cell:
+                result["activity_date"] = cell.split(":")[-1].strip()
 
-        # Dates — row 7: Report Date, row 8: Activity Date
-        if "REPORT DATE" in label and row[6]:
-            val = str(row[6]).replace("Report Date:", "").strip()
-            result["report_date"] = val
-        if "ACTIVITY DATE" in label and row[6]:
-            val = str(row[6]).replace("Activity Date:", "").strip()
-            result["activity_date"] = val
-        # Also check col 6 directly for date strings
-        if row[6] and "Report Date:" in str(row[6]):
-            result["report_date"] = str(row[6]).replace("Report Date:", "").strip()
-        if row[6] and "Activity Date:" in str(row[6]):
-            result["activity_date"] = str(row[6]).replace("Activity Date:", "").strip()
-
-        # Warehouse header row
+        # ── Warehouse header ─────────────────────────────────
         if label in WAREHOUSES:
-            current_warehouse = label
+            current_wh = label
             continue
 
-        # Per-warehouse data rows
-        if current_warehouse and label in ("REGISTERED (WARRANTED)", "REGISTERED"):
-            result["warehouses"][current_warehouse]["reg_prev"]  = _num(row[2])
-            result["warehouses"][current_warehouse]["reg_today"] = _num(row[7])
+        # ── Per-warehouse rows ───────────────────────────────
+        if current_wh:
+            prev_val  = _num(row[2]) if len(row) > 2 else None
+            today_val = _num(row[7]) if len(row) > 7 else None
 
-        if current_warehouse and label in ("ELIGIBLE (NON-WARRANTED)", "ELIGIBLE"):
-            result["warehouses"][current_warehouse]["elig_prev"]  = _num(row[2])
-            result["warehouses"][current_warehouse]["elig_today"] = _num(row[7])
+            if "REGISTERED" in label and "TOTAL" not in label:
+                result["warehouses"][current_wh]["reg_prev"]  = prev_val
+                result["warehouses"][current_wh]["reg_today"] = today_val
 
-        if current_warehouse and label == "TOTAL" and _num(row[2]) is not None:
-            result["warehouses"][current_warehouse]["total_prev"]  = _num(row[2])
-            result["warehouses"][current_warehouse]["total_today"] = _num(row[7])
+            elif "ELIGIBLE" in label and "TOTAL" not in label:
+                result["warehouses"][current_wh]["elig_prev"]  = prev_val
+                result["warehouses"][current_wh]["elig_today"] = today_val
 
-        # Grand totals
+            elif label == "TOTAL" and prev_val is not None:
+                result["warehouses"][current_wh]["total_prev"]  = prev_val
+                result["warehouses"][current_wh]["total_today"] = today_val
+
+        # ── Grand totals ─────────────────────────────────────
         if "TOTAL REGISTERED" in label:
             result["registered_st"] = _num(row[7])
             print(f"  → registered_st = {result['registered_st']}")
@@ -167,7 +175,7 @@ def parse_xls(content):
             result["total_st"] = _num(row[7])
             print(f"  → total_st = {result['total_st']}")
 
-    # Fallback
+    # Fallbacks
     if result["total_st"] is None and result["registered_st"] and result["eligible_st"]:
         result["total_st"] = result["registered_st"] + result["eligible_st"]
 
@@ -193,6 +201,10 @@ def ensure_comex_headers(tab):
     if not first or first[0] != "Date":
         tab.insert_row(COMEX_HEADERS, 1)
         print("✅ COMEX headers written")
+    elif len(first) < len(COMEX_HEADERS):
+        # Schema expanded — update headers in place without touching data
+        tab.update("A1:AW1", [COMEX_HEADERS], value_input_option="USER_ENTERED")
+        print("✅ COMEX headers updated to expanded schema")
 
 
 def calc_comex_change(tab, total_mt):
@@ -226,15 +238,18 @@ def write_to_sheet(data):
     change_mt = calc_comex_change(comex_tab, data["total_mt"])
 
     if already_logged:
-        print(f"Duplicate: activity_date {data['activity_date']} already in COMEX tab. Skipping tab write.")
+        print(f"Duplicate: {data['activity_date']} already in COMEX tab. Skipping tab write.")
     else:
-        # Build per-warehouse cells: Prev Total, Total Today only
         wh_cells = []
         for wh in WAREHOUSES:
             w = data["warehouses"][wh]
             wh_cells += [
-                w["total_prev"]  or "",
-                w["total_today"] or "",
+                w["reg_prev"]   if w["reg_prev"]   is not None else "",
+                w["reg_today"]  if w["reg_today"]  is not None else "",
+                w["elig_prev"]  if w["elig_prev"]  is not None else "",
+                w["elig_today"] if w["elig_today"] is not None else "",
+                w["total_prev"] if w["total_prev"] is not None else "",
+                w["total_today"]if w["total_today"]is not None else "",
             ]
 
         comex_row = [
@@ -249,7 +264,7 @@ def write_to_sheet(data):
             CME_URL
         ]
         comex_tab.append_row(comex_row, value_input_option="USER_ENTERED")
-        print(f"✅ COMEX tab: {data['total_mt']} mt | registered {data['registered_mt']} mt | change {change_mt} mt")
+        print(f"✅ COMEX tab: {data['total_mt']} mt | reg {data['registered_mt']} mt | elig {data['eligible_mt']} mt | change {change_mt} mt")
         for wh in WAREHOUSES:
             w = data["warehouses"][wh]
             print(f"   {wh}: reg={w['reg_today']} elig={w['elig_today']} total={w['total_today']}")
@@ -289,7 +304,7 @@ def main():
               f"registered_mt={data['registered_mt']}, eligible_mt={data['eligible_mt']}")
 
         if not data["total_st"]:
-            raise ValueError("Parse failed — total_st is None")
+            raise ValueError("Parse failed — total_st is None. Check row logs above.")
 
         write_to_sheet(data)
         print("\n✅ Done.")
