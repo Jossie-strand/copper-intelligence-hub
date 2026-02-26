@@ -1,16 +1,25 @@
 """
 feeds/comex_inventory.py
 
-Fetches COMEX Copper Vault Inventory XLS from CME Group,
-parses registered/eligible/total, converts to metric tonnes,
-writes to COMEX tab and updates the shared Dashboard.
+Fetches COMEX Copper Vault Inventory XLS from CME Group.
+Parses per-warehouse registered/eligible/total (prev + today),
+writes full detail to COMEX tab and updates shared Dashboard.
+
+XLS structure (cols 0-8):
+  Col 0: Label (warehouse name, Registered, Eligible, Total, grand totals)
+  Col 2: Prev Total (st)
+  Col 3: Received (st)
+  Col 4: Withdrawn (st)
+  Col 5: Net Change (st)
+  Col 6: Adjustment (st)
+  Col 7: Total Today (st)
 """
 
 import os
 import json
 import datetime
 import requests
-import xlrd
+import openpyxl
 import gspread
 from google.oauth2.service_account import Credentials
 from dashboard import write_exchange, ensure_headers
@@ -28,9 +37,22 @@ SCOPES = [
 
 ST_TO_MT = 0.907185
 
+WAREHOUSES = [
+    "BALTIMORE", "DETROIT", "EL PASO",
+    "NEW ORLEANS", "OWENSBORO", "SALT LAKE CITY", "TUCSON"
+]
+
+# COMEX tab headers — totals + per-warehouse prev/today for registered, eligible, total
 COMEX_HEADERS = [
     "Date", "Report Date", "Activity Date",
-    "Total Registered (st)", "Total Eligible (st)", "Total (st)", "Total (mt)",
+    "Registered (st)", "Eligible (st)", "Total (st)", "Total (mt)",
+    "BALTIMORE Prev Total", "BALTIMORE Total Today",
+    "DETROIT Prev Total", "DETROIT Total Today",
+    "EL PASO Prev Total", "EL PASO Total Today",
+    "NEW ORLEANS Prev Total", "NEW ORLEANS Total Today",
+    "OWENSBORO Prev Total", "OWENSBORO Total Today",
+    "SALT LAKE CITY Prev Total", "SALT LAKE CITY Total Today",
+    "TUCSON Prev Total", "TUCSON Total Today",
     "Source"
 ]
 
@@ -49,9 +71,29 @@ def fetch_xls():
 
 
 # ── PARSE ─────────────────────────────────────────────────────
+def _cell(ws, row_idx, col_idx):
+    """Safe cell reader — returns value or None."""
+    try:
+        val = ws.cell(row=row_idx + 1, column=col_idx + 1).value
+        return val
+    except Exception:
+        return None
+
+
+def _num(val):
+    """Convert cell to float, None if blank/text."""
+    if val is None or val == "":
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
 def parse_xls(content):
-    wb = xlrd.open_workbook(file_contents=content)
-    ws = wb.sheet_by_index(0)
+    import io
+    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    ws = wb.active
 
     result = {
         "report_date":   "",
@@ -62,56 +104,70 @@ def parse_xls(content):
         "total_mt":      None,
         "registered_mt": None,
         "eligible_mt":   None,
+        "warehouses": {
+            wh: {"reg_prev": None, "reg_today": None,
+                 "elig_prev": None, "elig_today": None,
+                 "total_prev": None, "total_today": None}
+            for wh in WAREHOUSES
+        }
     }
 
-    all_rows = []
-    for row_idx in range(ws.nrows):
-        row_vals = [str(ws.cell_value(row_idx, col)).strip() for col in range(ws.ncols)]
-        all_rows.append(row_vals)
-        if row_idx < 20:
-            print(f"Row {row_idx}: {row_vals}")
+    rows = list(ws.iter_rows(values_only=True))
 
-    # Dates
-    for row in all_rows:
-        joined = " ".join(row)
-        if "Report Date" in joined and not result["report_date"]:
-            for cell in row:
-                if "/" in cell and len(cell) >= 8:
-                    result["report_date"] = cell.strip()
-                    break
-        if "Activity Date" in joined and not result["activity_date"]:
-            for cell in row:
-                clean = cell.split(":")[-1].strip()
-                if "/" in clean and len(clean) >= 8:
-                    result["activity_date"] = clean
-                    break
+    # Log first 20 rows for debugging
+    for i, row in enumerate(rows[:20]):
+        print(f"Row {i}: {list(row)}")
 
-    # Totals
-    for row in all_rows:
-        joined = " ".join(row).upper()
-        nums = []
-        for c in row:
-            clean = c.replace(",", "").replace(".", "")
-            if clean.lstrip("-").isdigit():
-                try:
-                    v = float(c.replace(",", ""))
-                    if abs(v) >= 100:
-                        nums.append(v)
-                except ValueError:
-                    pass
+    current_warehouse = None
 
-        if "TOTAL" in joined and "REGISTERED" in joined and nums:
-            result["registered_st"] = nums[-1]
+    for i, row in enumerate(rows):
+        label = str(row[0]).strip().upper() if row[0] else ""
+
+        # Dates — row 7: Report Date, row 8: Activity Date
+        if "REPORT DATE" in label and row[6]:
+            val = str(row[6]).replace("Report Date:", "").strip()
+            result["report_date"] = val
+        if "ACTIVITY DATE" in label and row[6]:
+            val = str(row[6]).replace("Activity Date:", "").strip()
+            result["activity_date"] = val
+        # Also check col 6 directly for date strings
+        if row[6] and "Report Date:" in str(row[6]):
+            result["report_date"] = str(row[6]).replace("Report Date:", "").strip()
+        if row[6] and "Activity Date:" in str(row[6]):
+            result["activity_date"] = str(row[6]).replace("Activity Date:", "").strip()
+
+        # Warehouse header row
+        if label in WAREHOUSES:
+            current_warehouse = label
+            continue
+
+        # Per-warehouse data rows
+        if current_warehouse and label in ("REGISTERED (WARRANTED)", "REGISTERED"):
+            result["warehouses"][current_warehouse]["reg_prev"]  = _num(row[2])
+            result["warehouses"][current_warehouse]["reg_today"] = _num(row[7])
+
+        if current_warehouse and label in ("ELIGIBLE (NON-WARRANTED)", "ELIGIBLE"):
+            result["warehouses"][current_warehouse]["elig_prev"]  = _num(row[2])
+            result["warehouses"][current_warehouse]["elig_today"] = _num(row[7])
+
+        if current_warehouse and label == "TOTAL" and _num(row[2]) is not None:
+            result["warehouses"][current_warehouse]["total_prev"]  = _num(row[2])
+            result["warehouses"][current_warehouse]["total_today"] = _num(row[7])
+
+        # Grand totals
+        if "TOTAL REGISTERED" in label:
+            result["registered_st"] = _num(row[7])
             print(f"  → registered_st = {result['registered_st']}")
 
-        if "TOTAL" in joined and "ELIGIBLE" in joined and nums:
-            result["eligible_st"] = nums[-1]
+        if "TOTAL ELIGIBLE" in label:
+            result["eligible_st"] = _num(row[7])
             print(f"  → eligible_st = {result['eligible_st']}")
 
-        if "TOTAL" in joined and "COPPER" in joined and nums:
-            result["total_st"] = nums[-1]
+        if label == "TOTAL COPPER":
+            result["total_st"] = _num(row[7])
             print(f"  → total_st = {result['total_st']}")
 
+    # Fallback
     if result["total_st"] is None and result["registered_st"] and result["eligible_st"]:
         result["total_st"] = result["registered_st"] + result["eligible_st"]
 
@@ -140,10 +196,10 @@ def ensure_comex_headers(tab):
 
 
 def calc_comex_change(tab, total_mt):
-    """Delta from the most recent prior row's Total (mt) — col G (index 6, col 7)."""
+    """Delta from most recent prior row's Total (mt) — col G (col 7)."""
     if total_mt is None:
         return None
-    all_vals = tab.col_values(7)  # Total (mt) = col G
+    all_vals = tab.col_values(7)
     for v in reversed(all_vals[1:]):
         try:
             prev = float(str(v).replace(",", ""))
@@ -172,6 +228,15 @@ def write_to_sheet(data):
     if already_logged:
         print(f"Duplicate: activity_date {data['activity_date']} already in COMEX tab. Skipping tab write.")
     else:
+        # Build per-warehouse cells: Prev Total, Total Today only
+        wh_cells = []
+        for wh in WAREHOUSES:
+            w = data["warehouses"][wh]
+            wh_cells += [
+                w["total_prev"]  or "",
+                w["total_today"] or "",
+            ]
+
         comex_row = [
             today,
             data["report_date"],
@@ -180,20 +245,24 @@ def write_to_sheet(data):
             data["eligible_st"]   or "",
             data["total_st"]      or "",
             data["total_mt"]      or "",
+            *wh_cells,
             CME_URL
         ]
         comex_tab.append_row(comex_row, value_input_option="USER_ENTERED")
         print(f"✅ COMEX tab: {data['total_mt']} mt | registered {data['registered_mt']} mt | change {change_mt} mt")
+        for wh in WAREHOUSES:
+            w = data["warehouses"][wh]
+            print(f"   {wh}: reg={w['reg_today']} elig={w['elig_today']} total={w['total_today']}")
 
-    # Dashboard always runs — keyed on activity_date (the data date)
-    # Parse activity_date from M/D/YYYY to YYYY-MM-DD
+    # Dashboard always runs — keyed on activity_date
     data_date = today
     if data["activity_date"]:
         try:
-            import datetime as _dt
-            data_date = _dt.datetime.strptime(data["activity_date"], "%m/%d/%Y").strftime("%Y-%m-%d")
+            data_date = datetime.datetime.strptime(
+                data["activity_date"], "%m/%d/%Y"
+            ).strftime("%Y-%m-%d")
         except ValueError:
-            pass  # fallback to today
+            pass
 
     ensure_headers(dash_tab)
     write_exchange(
