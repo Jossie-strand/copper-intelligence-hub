@@ -148,9 +148,9 @@ def write_to_sheet(data):
         lme_tab.append_row(lme_row, value_input_option="USER_ENTERED")
         print(f"✅ LME tab: {data['total_mt']} mt | change {data['change_mt']} mt")
 
-    # Dashboard always runs — idempotent update
+    # Dashboard always runs — keyed on report_date (the data date)
     ensure_headers(dash_tab)
-    write_exchange(dash_tab, today, "LME", data["total_mt"], data["change_mt"])
+    write_exchange(dash_tab, data["report_date"], "LME", data["total_mt"], data["change_mt"])
 
 
 # ── MAIN ──────────────────────────────────────────────────────
