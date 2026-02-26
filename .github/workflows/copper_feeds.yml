@@ -78,6 +78,60 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
+  # ── MINE DISRUPTION MONITOR ───────────────────
+  # Scans major miner IR pages daily for disruption signals
+  mine-disruption-monitor:
+    name: Mine Disruption Monitor
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: python feeds/mine_disruption_monitor.py
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+  # ── USGS MINE PRODUCTION ──────────────────────
+  # Quarterly data; runs monthly and skips if no update detected
+  usgs-mine-production:
+    name: USGS Mine Production (Quarterly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Run on the 1st of each month only
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.schedule, '30 2') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: python feeds/usgs_mine_production.py
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+  # ── ICSG SUPPLY/DEMAND ────────────────────────
+  # Monthly press release; runs on 1st of month
+  icsg-supply-demand:
+    name: ICSG Supply/Demand Balance (Monthly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.schedule, '30 2') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: python feeds/icsg_supply_demand.py
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
   # ── PLACEHOLDER: COPPER PRICE ──────────────────────────────
   # copper-price:
   #   name: Copper Price Feed
