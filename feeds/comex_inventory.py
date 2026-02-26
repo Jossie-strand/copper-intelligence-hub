@@ -185,10 +185,19 @@ def write_to_sheet(data):
         comex_tab.append_row(comex_row, value_input_option="USER_ENTERED")
         print(f"✅ COMEX tab: {data['total_mt']} mt | registered {data['registered_mt']} mt | change {change_mt} mt")
 
-    # Dashboard always runs — idempotent update
+    # Dashboard always runs — keyed on activity_date (the data date)
+    # Parse activity_date from M/D/YYYY to YYYY-MM-DD
+    data_date = today
+    if data["activity_date"]:
+        try:
+            import datetime as _dt
+            data_date = _dt.datetime.strptime(data["activity_date"], "%m/%d/%Y").strftime("%Y-%m-%d")
+        except ValueError:
+            pass  # fallback to today
+
     ensure_headers(dash_tab)
     write_exchange(
-        dash_tab, today, "COMEX",
+        dash_tab, data_date, "COMEX",
         total_mt=data["total_mt"],
         change_mt=change_mt,
         extras={
