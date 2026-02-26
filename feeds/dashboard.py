@@ -197,4 +197,4 @@ def write_exchange(tab, data_date_str, exchange, total_mt, change_mt, extras=Non
         row_data[COL_WOW] = _calc_wow(tab, data_date, combined_t)
 
         tab.append_row(row_data, value_input_option="USER_ENTERED")
-        print(f"  ✅ Dashboard new row created for {data_date_str}
+        print(f"  ✅ Dashboard new row created for {data_date_str} ({exchange}: {total_mt} mt)")
