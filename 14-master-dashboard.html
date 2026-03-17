@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Copper Intelligence Hub — Weekly Dashboard</title>
+<style>
+  :root {
+    --copper-dark: #1B3A5C;
+    --copper-mid: #2E6DA4;
+    --copper-light: #D5E8F0;
+    --copper-pale: #EEF6FA;
+    --gold: #B8860B;
+    --green: #2E7D32;
+    --red: #C62828;
+    --orange: #E65100;
+    --gray-light: #F5F6F8;
+    --gray-mid: #E0E4EA;
+    --gray-dark: #5C6470;
+    --white: #FFFFFF;
+    --font: 'Segoe UI', Arial, sans-serif;
+    --radius: 6px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font);
+    background: #F0F3F7;
+    color: #1A1E26;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────── */
+  .page-header {
+    background: var(--copper-dark);
+    padding: 0;
+    display: flex;
+    align-items: stretch;
+  }
+  .header-brand {
+    padding: 16px 24px;
+    border-right: 1px solid rgba(255,255,255,0.1);
+  }
+  .header-brand h1 {
+    font-size: 22px; font-weight: 700; color: #fff; letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .header-brand .sub { font-size: 11px; color: #9EC4E0; letter-spacing: 2px; text-transform: uppercase; margin-top: 2px; }
+  .header-meta {
+    display: flex; align-items: center; gap: 24px; padding: 0 24px; flex: 1;
+  }
+  .meta-field { display: flex; flex-direction: column; }
+  .meta-field label { font-size: 10px; color: #9EC4E0; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+  .meta-field input {
+    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+    color: #fff; padding: 4px 8px; border-radius: 3px; font-size: 13px; font-family: var(--font);
+    width: 140px;
+  }
+  .header-lme {
+    background: var(--copper-mid);
+    padding: 12px 24px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-width: 160px;
+  }
+  .header-lme .price-label { font-size: 10px; color: #cce; text-transform: uppercase; letter-spacing: 1px; }
+  .header-lme .price-val { font-size: 28px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
+  .header-lme .price-chg { font-size: 11px; color: #9EC4E0; }
+
+  /* ── Layout ──────────────────────────────────────────────────── */
+  .dashboard { padding: 16px; display: grid; gap: 14px; }
+
+  /* Row 1: Key stats bar */
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 10px;
+  }
+  .stat-card {
+    background: var(--white);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    border-left: 3px solid var(--copper-mid);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .stat-card.bull { border-left-color: var(--green); }
+  .stat-card.bear { border-left-color: var(--red); }
+  .stat-card.neutral { border-left-color: var(--gold); }
+  .stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--gray-dark); margin-bottom: 4px; }
+  .stat-val { font-size: 20px; font-weight: 700; color: var(--copper-dark); font-variant-numeric: tabular-nums; }
+  .stat-val input {
+    width: 100%; border: none; outline: none; font-size: 20px; font-weight: 700;
+    color: var(--copper-dark); font-family: var(--font); background: transparent;
+  }
+  .stat-sub { font-size: 11px; color: var(--gray-dark); margin-top: 2px; }
+  .stat-sub input {
+    width: 100%; border: none; outline: none; font-size: 11px;
+    color: var(--gray-dark); font-family: var(--font); background: transparent;
+  }
+  .stat-signal { display: inline-block; margin-top: 4px; padding: 2px 7px; border-radius: 3px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  .sig-bull { background: #E8F5E9; color: var(--green); }
+  .sig-bear { background: #FEEFEE; color: var(--red); }
+  .sig-neutral { background: #FFF8E1; color: #E65100; }
+
+  /* Row 2: 3-panel main */
+  .main-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+  /* Cards */
+  .card {
+    background: var(--white);
+    border-radius: var(--radius);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    overflow: hidden;
+  }
+  .card-header {
+    background: var(--copper-dark);
+    color: #fff;
+    padding: 10px 14px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .card-header h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+  .card-header .card-badge {
+    font-size: 10px; padding: 2px 7px; border-radius: 10px;
+    background: rgba(255,255,255,0.15); color: #cce;
+  }
+  .card-body { padding: 12px 14px; }
+
+  /* Table styles */
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table th {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--copper-mid); padding: 6px 8px; border-bottom: 2px solid var(--copper-light);
+    text-align: left;
+  }
+  .data-table td {
+    padding: 7px 8px; border-bottom: 1px solid var(--gray-mid);
+    font-variant-numeric: tabular-nums;
+  }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table td:first-child { font-weight: 600; color: var(--copper-dark); }
+  .data-table td input {
+    width: 100%; border: none; outline: none; background: transparent;
+    font-size: 13px; font-family: var(--font); color: #1A1E26;
+    font-variant-numeric: tabular-nums;
+  }
+  .data-table tr:hover td { background: var(--gray-light); }
+  .total-row td { font-weight: 700; color: var(--copper-dark); background: var(--copper-pale) !important; }
+
+  /* Signal pills in table */
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
+  .pill-bull { background: #E8F5E9; color: #1B5E20; }
+  .pill-bear { background: #FEEFEE; color: #B71C1C; }
+  .pill-neutral { background: #FFF8E1; color: #BF360C; }
+
+  /* Narrative fields */
+  .narrative-field {
+    margin-bottom: 10px;
+  }
+  .narrative-field label {
+    display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px;
+    color: var(--copper-mid); font-weight: 700; margin-bottom: 3px;
+  }
+  .narrative-field textarea {
+    width: 100%; border: 1px solid var(--gray-mid); border-radius: 3px;
+    padding: 6px 8px; font-size: 12px; font-family: var(--font); color: #1A1E26;
+    resize: vertical; min-height: 44px; line-height: 1.4;
+    background: var(--gray-light);
+  }
+  .narrative-field textarea:focus { outline: none; border-color: var(--copper-mid); background: #fff; }
+  .narrative-field input[type=text] {
+    width: 100%; border: 1px solid var(--gray-mid); border-radius: 3px;
+    padding: 5px 8px; font-size: 13px; font-family: var(--font); color: #1A1E26;
+    background: var(--gray-light);
+  }
+  .narrative-field input[type=text]:focus { outline: none; border-color: var(--copper-mid); background: #fff; }
+
+  /* Select dropdown */
+  .signal-select {
+    border: 1px solid var(--gray-mid); border-radius: 3px;
+    padding: 5px 8px; font-size: 12px; font-family: var(--font);
+    background: var(--gray-light); color: #1A1E26; width: 100%;
+    cursor: pointer;
+  }
+  .signal-select:focus { outline: none; border-color: var(--copper-mid); }
+
+  /* Synthesis row */
+  .synthesis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .bull-box { border-left: 4px solid var(--green); padding-left: 12px; }
+  .bear-box { border-left: 4px solid var(--red); padding-left: 12px; }
+  .box-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .bull-box .box-title { color: var(--green); }
+  .bear-box .box-title { color: var(--red); }
+
+  /* Assessment bar */
+  .assessment-bar {
+    background: var(--white);
+    border-radius: var(--radius);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    padding: 14px 20px;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 14px;
+    border-top: 3px solid var(--copper-mid);
+  }
+  .assess-item label {
+    display: block; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.8px; color: var(--copper-mid); font-weight: 700; margin-bottom: 4px;
+  }
+
+  /* Tightness meter */
+  .tightness-meter { margin-top: 10px; }
+  .meter-track {
+    height: 8px; background: var(--gray-mid); border-radius: 4px;
+    position: relative; overflow: hidden;
+  }
+  .meter-fill {
+    height: 100%; border-radius: 4px;
+    background: linear-gradient(90deg, var(--red) 0%, var(--orange) 30%, var(--gold) 55%, var(--green) 80%);
+    transition: width 0.3s;
+  }
+  .meter-labels { display: flex; justify-content: space-between; margin-top: 2px; font-size: 9px; color: var(--gray-dark); }
+
+  /* Instructions notice */
+  .instructions {
+    background: #FFF8E1;
+    border: 1px solid #FFE082;
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    font-size: 11px; color: #5D4037;
+  }
+  .instructions b { color: #BF360C; }
+
+  /* Print / export */
+  @media print {
+    body { background: white; }
+    .instructions { display: none; }
+    .page-header, .card, .stats-bar, .assessment-bar { box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── PAGE HEADER ──────────────────────────────────────────────────────── -->
+<div class="page-header">
+  <div class="header-brand">
+    <h1>⚡ Copper</h1>
+    <div class="sub">Intelligence Hub</div>
+  </div>
+  <div class="header-meta">
+    <div class="meta-field">
+      <label>Week Of</label>
+      <input type="text" id="weekOf" placeholder="e.g. 24 Feb 2026">
+    </div>
+    <div class="meta-field">
+      <label>Analyst</label>
+      <input type="text" id="analyst" placeholder="Your name">
+    </div>
+    <div class="meta-field">
+      <label>Bias</label>
+      <select class="signal-select" id="overallBias" style="color:#fff;background:rgba(255,255,255,0.15);border-color:rgba(255,255,255,0.3);width:160px;" onchange="updateBiasColor(this)">
+        <option value="">— Select —</option>
+        <option value="bull">BULLISH</option>
+        <option value="cautious">CAUTIOUSLY BULLISH</option>
+        <option value="neutral">NEUTRAL</option>
+        <option value="bear">BEARISH</option>
+        <option value="cautious-bear">CAUTIOUSLY BEARISH</option>
+      </select>
+    </div>
+  </div>
+  <div class="header-lme">
+    <div class="price-label">LME 3M ($/t)</div>
+    <div class="price-val"><input type="text" id="lmePrice" placeholder="—" style="background:transparent;border:none;color:#fff;font-size:26px;font-weight:700;width:120px;text-align:center;outline:none;font-family:var(--font);font-variant-numeric:tabular-nums;"></div>
+    <div class="price-chg"><input type="text" id="lmePriceChg" placeholder="WoW %" style="background:transparent;border:none;color:#9EC4E0;font-size:11px;width:100px;text-align:center;outline:none;font-family:var(--font);"></div>
+  </div>
+</div>
+
+<div class="dashboard">
+
+  <!-- ── INSTRUCTIONS ─────────────────────────────────────────────────────── -->
+  <div class="instructions">
+    <b>How to use this dashboard:</b> Fill in the white input fields each week with your data. All fields are editable directly in the browser.
+    To save: use <b>Ctrl+P → Save as PDF</b> (or right-click → Print). For a new week, refresh the page or use File → Save As to keep a copy.
+    Data sources: see <b>13-source-log.docx</b> for URLs and cadence.
+  </div>
+
+  <!-- ── STATS BAR ─────────────────────────────────────────────────────────── -->
+  <div class="stats-bar">
+    <div class="stat-card">
+      <div class="stat-label">3-Exchange Total (t)</div>
+      <div class="stat-val"><input type="text" id="totalInv" placeholder="—" oninput="updateTightness()"></div>
+      <div class="stat-sub">WoW: <input type="text" placeholder="±t" style="width:60px;border:none;outline:none;font-size:11px;color:var(--gray-dark);background:transparent;font-family:var(--font);"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">LME Canc. Warrant %</div>
+      <div class="stat-val"><input type="text" id="cancPct" placeholder="—%"></div>
+      <div class="stat-sub" id="cancSignal">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">TC/RC Spot ($/t | ¢/lb)</div>
+      <div class="stat-val"><input type="text" placeholder="$__ / __¢" style="font-size:16px;font-weight:700;color:var(--copper-dark);border:none;outline:none;background:transparent;font-family:var(--font);width:100%;"></div>
+      <div class="stat-sub"><input type="text" placeholder="Bench: $__ / __¢" style="width:100%;border:none;outline:none;font-size:11px;color:var(--gray-dark);background:transparent;font-family:var(--font);"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">China Grid Capex YoY</div>
+      <div class="stat-val"><input type="text" placeholder="+__%"></div>
+      <div class="stat-sub"><input type="text" placeholder="RMB ___bn YTD" style="width:100%;border:none;outline:none;font-size:11px;color:var(--gray-dark);background:transparent;font-family:var(--font);"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">China EV Sales (k units)</div>
+      <div class="stat-val"><input type="text" placeholder="—k"></div>
+      <div class="stat-sub"><input type="text" placeholder="YoY %" style="width:100%;border:none;outline:none;font-size:11px;color:var(--gray-dark);background:transparent;font-family:var(--font);"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">NBS Construct. PMI</div>
+      <div class="stat-val"><input type="text" placeholder="—.—"></div>
+      <div class="stat-sub"><input type="text" placeholder="Prev: __.__" style="width:100%;border:none;outline:none;font-size:11px;color:var(--gray-dark);background:transparent;font-family:var(--font);"></div>
+    </div>
+  </div>
+
+  <!-- ── MAIN 3-COLUMN ─────────────────────────────────────────────────────── -->
+  <div class="main-grid">
+
+    <!-- Col 1: Exchange Inventories -->
+    <div class="card">
+      <div class="card-header">
+        <h3>📦 Exchange Inventories</h3>
+        <span class="card-badge">LME · COMEX · SHFE</span>
+      </div>
+      <div class="card-body">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Exchange</th><th>Stocks (t)</th><th>WoW Chg</th><th>Signal</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>LME</td>
+              <td><input type="text" placeholder="—"></td>
+              <td><input type="text" placeholder="±t"></td>
+              <td><select class="signal-select" style="font-size:11px;padding:2px 4px;width:80px;"><option>—</option><option>Draw ↓</option><option>Build ↑</option><option>Flat →</option></select></td>
+            </tr>
+            <tr>
+              <td>COMEX</td>
+              <td><input type="text" placeholder="—"></td>
+              <td><input type="text" placeholder="±t"></td>
+              <td><select class="signal-select" style="font-size:11px;padding:2px 4px;width:80px;"><option>—</option><option>Draw ↓</option><option>Build ↑</option><option>Flat →</option></select></td>
+            </tr>
+            <tr>
+              <td>SHFE</td>
+              <td><input type="text" placeholder="—"></td>
+              <td><input type="text" placeholder="±t"></td>
+              <td><select class="signal-select" style="font-size:11px;padding:2px 4px;width:80px;"><option>—</option><option>Draw ↓</option><option>Build ↑</option><option>Flat →</option></select></td>
+            </tr>
+            <tr class="total-row">
+              <td>TOTAL</td>
+              <td><input type="text" placeholder="—" id="totalInvTable" oninput="syncTotal(this)"></td>
+              <td><input type="text" placeholder="±t"></td>
+              <td id="tightnessLabel">—</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="tightness-meter">
+          <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+            <span style="font-size:10px;color:var(--gray-dark);text-transform:uppercase;letter-spacing:0.8px;">Tightness Meter</span>
+            <span id="tightnessText" style="font-size:10px;color:var(--gray-dark);"></span>
+          </div>
+          <div class="meter-track"><div class="meter-fill" id="meterFill" style="width:50%"></div></div>
+          <div class="meter-labels"><span style="color:var(--red);">Very Tight &lt;150kt</span><span>Tight &lt;200kt</span><span>Normal</span><span style="color:var(--green);">Loose &gt;400kt</span></div>
+        </div>
+        <div style="margin-top:10px;">
+          <div class="narrative-field">
+            <label>LME Cancelled Warrant Note</label>
+            <input type="text" placeholder="e.g. 28% cancelled — approaching tightness threshold">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Col 2: Supply Signals -->
+    <div class="card">
+      <div class="card-header">
+        <h3>⛏ Supply Signals</h3>
+        <span class="card-badge">Disruptions · TC/RC</span>
+      </div>
+      <div class="card-body">
+        <div class="narrative-field">
+          <label>TC/RC Spot vs Benchmark</label>
+          <table class="data-table" style="margin-bottom:6px;">
+            <thead><tr><th></th><th>Spot</th><th>Benchmark</th><th>Spread</th></tr></thead>
+            <tbody>
+              <tr><td>TC ($/t)</td><td><input type="text" placeholder="—"></td><td><input type="text" placeholder="—"></td><td><input type="text" placeholder="—"></td></tr>
+              <tr><td>RC (¢/lb)</td><td><input type="text" placeholder="—"></td><td><input type="text" placeholder="—"></td><td><input type="text" placeholder="—"></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="narrative-field">
+          <label>TC/RC Signal</label>
+          <select class="signal-select">
+            <option>— Select —</option>
+            <option>BULLISH — Spot &lt; Benchmark (concentrate tight)</option>
+            <option>NEUTRAL — Spot ≈ Benchmark</option>
+            <option>BEARISH — Spot &gt; Benchmark (concentrate surplus)</option>
+          </select>
+        </div>
+        <div class="narrative-field" style="margin-top:10px;">
+          <label>Active Mine Disruptions</label>
+          <textarea placeholder="Mine: _____ | Type: LABOR/WEATHER/REGULATORY&#10;Est. impact: _____ kt/yr | Status: ACTIVE&#10;&#10;Add each disruption on a new line"></textarea>
+        </div>
+        <div class="narrative-field">
+          <label>Total kt/yr at Risk</label>
+          <input type="text" placeholder="e.g. 180 kt/yr across 3 operations">
+        </div>
+        <div class="narrative-field">
+          <label>Supply Signal</label>
+          <select class="signal-select">
+            <option>— Select —</option>
+            <option>BULLISH</option><option>CAUTIOUSLY BULLISH</option>
+            <option>NEUTRAL</option><option>BEARISH</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Col 3: Macro & Demand -->
+    <div class="card">
+      <div class="card-header">
+        <h3>🌐 Macro &amp; Demand</h3>
+        <span class="card-badge">China · Macro</span>
+      </div>
+      <div class="card-body">
+        <table class="data-table" style="margin-bottom:10px;">
+          <thead><tr><th>Indicator</th><th>Value</th><th>YoY / Trend</th></tr></thead>
+          <tbody>
+            <tr><td>USD (DXY)</td><td><input type="text" placeholder="—.—"></td><td><input type="text" placeholder="WoW%"></td></tr>
+            <tr><td>US Real Rates</td><td><input type="text" placeholder="—.—%"></td><td><input type="text" placeholder="WoW chg"></td></tr>
+            <tr><td>China PMI (Mfg)</td><td><input type="text" placeholder="—.—"></td><td><input type="text" placeholder="Trend"></td></tr>
+            <tr><td>China Grid Capex</td><td><input type="text" placeholder="RMBbn"></td><td><input type="text" placeholder="YoY%"></td></tr>
+            <tr><td>EV Sales (China)</td><td><input type="text" placeholder="__k units"></td><td><input type="text" placeholder="YoY%"></td></tr>
+            <tr><td>Bonded WHse (SMM)</td><td><input type="text" placeholder="__t"></td><td><input type="text" placeholder="WoW"></td></tr>
+          </tbody>
+        </table>
+        <div class="narrative-field">
+          <label>Key Macro Events This Week</label>
+          <textarea placeholder="e.g. FOMC meeting, China NBS data release, LME Week..."></textarea>
+        </div>
+        <div class="narrative-field">
+          <label>Macro Signal</label>
+          <select class="signal-select">
+            <option>— Select —</option>
+            <option>BULLISH</option><option>CAUTIOUSLY BULLISH</option>
+            <option>NEUTRAL</option><option>BEARISH</option>
+          </select>
+        </div>
+        <div class="narrative-field">
+          <label>Demand Signal</label>
+          <select class="signal-select">
+            <option>— Select —</option>
+            <option>BULLISH</option><option>CAUTIOUSLY BULLISH</option>
+            <option>NEUTRAL</option><option>BEARISH</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TECHNICALS + POSITIONING ──────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><h3>📈 Technicals &amp; Positioning</h3></div>
+    <div class="card-body" style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
+      <div>
+        <div class="narrative-field"><label>LME 3M Price</label><input type="text" placeholder="$_____/t"></div>
+        <div class="narrative-field"><label>WoW Change</label><input type="text" placeholder="+____%"></div>
+        <div class="narrative-field"><label>YTD Change</label><input type="text" placeholder="+____%"></div>
+      </div>
+      <div>
+        <div class="narrative-field"><label>Key Support Levels</label><input type="text" placeholder="$_____, $_____"></div>
+        <div class="narrative-field"><label>Key Resistance</label><input type="text" placeholder="$_____, $_____"></div>
+        <div class="narrative-field"><label>vs 50d / 200d MA</label><input type="text" placeholder="Above / Below / At"></div>
+      </div>
+      <div>
+        <div class="narrative-field"><label>COT Net Spec (lots)</label><input type="text" placeholder="_____"></div>
+        <div class="narrative-field"><label>COT WoW Change</label><input type="text" placeholder="±_____"></div>
+        <div class="narrative-field"><label>Net % of OI</label><input type="text" placeholder="____%"></div>
+      </div>
+      <div>
+        <div class="narrative-field"><label>Positioning Bias</label>
+          <select class="signal-select">
+            <option>— Select —</option>
+            <option>LONG-HEAVY (crowded)</option><option>MODERATELY LONG</option>
+            <option>NEUTRAL</option><option>MODERATELY SHORT</option>
+            <option>SHORT-HEAVY (crowded)</option>
+          </select>
+        </div>
+        <div class="narrative-field"><label>Technical Setup</label>
+          <select class="signal-select">
+            <option>— Select —</option>
+            <option>BULLISH — Uptrend intact</option><option>NEUTRAL — Range-bound</option>
+            <option>BEARISH — Downtrend</option><option>BREAKOUT — Watch closely</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── BULL / BEAR + SYNTHESIS ───────────────────────────────────────────── -->
+  <div class="synthesis-grid">
+    <div class="card">
+      <div class="card-header" style="background:#2E7D32;"><h3>🟢 Bull Case</h3></div>
+      <div class="card-body">
+        <div class="narrative-field"><label>Bull Signal 1</label><input type="text" placeholder="e.g. LME inventory draw accelerating — 3-wk consecutive decline"></div>
+        <div class="narrative-field"><label>Bull Signal 2</label><input type="text" placeholder="e.g. TC/RC spot collapsed below benchmark — concentrate tightness"></div>
+        <div class="narrative-field"><label>Bull Signal 3</label><input type="text" placeholder="e.g. China grid capex +18% YoY — strong copper demand tailwind"></div>
+        <div class="narrative-field"><label>Bull Signal 4 (optional)</label><input type="text" placeholder=""></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header" style="background:#C62828;"><h3>🔴 Bear Case</h3></div>
+      <div class="card-body">
+        <div class="narrative-field"><label>Bear Signal 1</label><input type="text" placeholder="e.g. SHFE building ahead of Golden Week — demand softness signal"></div>
+        <div class="narrative-field"><label>Bear Signal 2</label><input type="text" placeholder="e.g. USD strengthening on Fed hawkishness — macro headwind"></div>
+        <div class="narrative-field"><label>Bear Signal 3</label><input type="text" placeholder="e.g. NBS construction PMI below 50 — property sector drag"></div>
+        <div class="narrative-field"><label>Bear Signal 4 (optional)</label><input type="text" placeholder=""></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── OVERALL ASSESSMENT BAR ────────────────────────────────────────────── -->
+  <div class="assessment-bar">
+    <div class="assess-item">
+      <label>Overall Bias</label>
+      <select class="signal-select" id="biasFinal">
+        <option>— Select —</option>
+        <option>BULLISH</option><option>CAUTIOUSLY BULLISH</option>
+        <option>NEUTRAL</option><option>CAUTIOUSLY BEARISH</option><option>BEARISH</option>
+      </select>
+    </div>
+    <div class="assess-item">
+      <label>Conviction</label>
+      <select class="signal-select">
+        <option>— Select —</option>
+        <option>HIGH</option><option>MEDIUM</option><option>LOW</option>
+      </select>
+    </div>
+    <div class="assess-item">
+      <label>Price Target Range (3-6mo)</label>
+      <input type="text" placeholder="$_______ – $_______/t" style="border:1px solid var(--gray-mid);border-radius:3px;padding:5px 8px;font-size:13px;font-family:var(--font);background:var(--gray-light);width:100%;">
+    </div>
+    <div class="assess-item">
+      <label>Key Catalyst to Watch</label>
+      <input type="text" placeholder="e.g. China stimulus announcement" style="border:1px solid var(--gray-mid);border-radius:3px;padding:5px 8px;font-size:13px;font-family:var(--font);background:var(--gray-light);width:100%;">
+    </div>
+    <div class="assess-item">
+      <label>Key Risk to View</label>
+      <input type="text" placeholder="e.g. USD rally on strong NFP" style="border:1px solid var(--gray-mid);border-radius:3px;padding:5px 8px;font-size:13px;font-family:var(--font);background:var(--gray-light);width:100%;">
+    </div>
+  </div>
+
+</div><!-- /dashboard -->
+
+<script>
+function updateTightness() {
+  var val = parseInt(document.getElementById('totalInv').value.replace(/,/g,'')) || 0;
+  var fill = document.getElementById('meterFill');
+  var label = document.getElementById('tightnessLabel');
+  var text = document.getElementById('tightnessText');
+
+  // Map: 0kt=0%, 150kt=15%, 200kt=30%, 400kt=70%, 600kt+=100%
+  var pct = Math.min(100, Math.max(0, (val / 600) * 100));
+  fill.style.width = pct + '%';
+
+  if (!val) { label.textContent = '—'; text.textContent = ''; return; }
+  if (val < 150) { label.innerHTML = '<span class="pill pill-bear">VERY TIGHT</span>'; text.textContent = val.toLocaleString() + 't'; }
+  else if (val < 200) { label.innerHTML = '<span class="pill pill-bear">TIGHT</span>'; text.textContent = val.toLocaleString() + 't'; }
+  else if (val < 400) { label.innerHTML = '<span class="pill pill-neutral">NORMAL</span>'; text.textContent = val.toLocaleString() + 't'; }
+  else { label.innerHTML = '<span class="pill pill-bull">LOOSE</span>'; text.textContent = val.toLocaleString() + 't'; }
+}
+
+function syncTotal(el) {
+  document.getElementById('totalInv').value = el.value;
+  updateTightness();
+}
+
+function updateBiasColor(sel) {
+  var colors = { bull: '#2E7D32', cautious: '#E65100', neutral: '#1B3A5C', bear: '#C62828', 'cautious-bear': '#B71C1C' };
+  sel.style.color = colors[sel.value] || '#fff';
+}
+</script>
+</body>
+</html>
