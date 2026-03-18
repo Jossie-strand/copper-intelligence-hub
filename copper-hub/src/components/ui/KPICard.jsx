@@ -8,13 +8,14 @@ const SIGNAL_BORDER = {
   neutral: 'border-l-signal-neutral',
 }
 
-export default function KPICard({ label, value, unit, changeValue, changeUnit, signal, subtext }) {
+export default function KPICard({ label, value, unit, changeValue, changeUnit, signal, subtext, onClick }) {
   const isPositiveChange = changeValue > 0
   const changeColor = isPositiveChange ? 'text-signal-bull' : changeValue < 0 ? 'text-signal-bear' : 'text-txt-secondary'
   const borderClass = signal ? `border-l-2 ${SIGNAL_BORDER[signal]}` : ''
+  const clickClass = onClick ? 'cursor-pointer hover:border-[#C87941]/50 transition-colors' : ''
 
   return (
-    <div className={`bg-bg-card rounded-lg p-4 ${borderClass} border border-[#1A2332]`}>
+    <div className={`bg-bg-card rounded-lg p-4 ${borderClass} border border-[#1A2332] ${clickClass}`} onClick={onClick}>
       <p className="text-txt-secondary text-xs font-body uppercase tracking-wider mb-2">{label}</p>
       <div className="flex items-end gap-2">
         <span className="text-txt-primary text-2xl font-mono font-semibold leading-none">

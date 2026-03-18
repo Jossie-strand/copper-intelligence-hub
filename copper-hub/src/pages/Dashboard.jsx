@@ -1,6 +1,7 @@
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts'
+import { useNavigate } from 'react-router-dom'
 import { useDashboardData } from '../data/hooks/useDashboardData'
 import { useInventoryData } from '../data/hooks/useInventoryData'
 import { usePricingData } from '../data/hooks/usePricingData'
@@ -25,20 +26,28 @@ const CHART_TOOLTIP_STYLE = {
   fontSize: 12,
 }
 
-function SparklineCard({ title, data, dataKey, color, latest, change }) {
+function SparklineCard({ title, data, dataKey, color, latest, change, onClick }) {
+  // Use last 30 rows for the sparkline display
+  const displayData = data.slice(-30)
   return (
-    <div className="bg-bg-card border border-[#1A2332] rounded-lg p-4">
+    <div
+      className="bg-bg-card border border-[#1A2332] rounded-lg p-4 group cursor-pointer hover:border-[#C87941]/50 transition-colors"
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between mb-3">
         <div>
           <p className="text-txt-secondary text-xs font-body uppercase tracking-wider">{title}</p>
           <p className="text-txt-primary text-xl font-mono font-semibold mt-1">{fmt(latest)} <span className="text-sm text-txt-secondary">mt</span></p>
         </div>
-        <span className={`text-xs font-mono ${change < 0 ? 'text-signal-bear' : change > 0 ? 'text-signal-bull' : 'text-txt-secondary'}`}>
-          {fmtChange(change)} mt
-        </span>
+        <div className="flex items-center gap-2">
+          <span className={`text-xs font-mono ${change < 0 ? 'text-signal-bear' : change > 0 ? 'text-signal-bull' : 'text-txt-secondary'}`}>
+            {fmtChange(change)} mt
+          </span>
+          <span className="text-txt-secondary text-xs opacity-0 group-hover:opacity-100 transition-opacity">↗</span>
+        </div>
       </div>
       <ResponsiveContainer width="100%" height={60}>
-        <LineChart data={data} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+        <LineChart data={displayData} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
           <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={1.5} dot={false} />
           <Tooltip
             contentStyle={CHART_TOOLTIP_STYLE}
@@ -52,6 +61,7 @@ function SparklineCard({ title, data, dataKey, color, latest, change }) {
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const { data: rows, latest } = useDashboardData()
   const { comexHistory, lmeHistory, shfeHistory } = useInventoryData()
   const { benchmarks, tcrcHistory } = usePricingData()
@@ -87,18 +97,27 @@ export default function Dashboard() {
       </div>
 
       {/* Row 1: KPI cards */}
-      <div className="grid grid-cols-5 gap-4">
+      <div className="grid grid-cols-6 gap-4">
         <KPICard
           label="LME 3-Month"
           value={`$${benchmarks.lme3Month.toLocaleString()}`}
           unit="/mt"
           subtext="Static placeholder"
+          onClick={() => navigate('/pricing')}
         />
         <KPICard
           label="COMEX Front"
           value={`$${benchmarks.comexFront.toFixed(3)}`}
           unit="/lb"
           subtext="Static placeholder"
+          onClick={() => navigate('/pricing')}
+        />
+        <KPICard
+          label="SHFE Front"
+          value={`¥${benchmarks.shfeFront.toLocaleString()}`}
+          unit="CNY/mt"
+          subtext="Static placeholder"
+          onClick={() => navigate('/pricing')}
         />
         <KPICard
           label="Combined Inventory"
@@ -152,7 +171,7 @@ export default function Dashboard() {
 
       {/* Row 3: Sparkline charts */}
       <div>
-        <SectionHeader title="30-Day Inventory Trends" />
+        <SectionHeader title="30-Day Inventory Trends" subtitle="Click a chart to view detailed inventory data" />
         <div className="grid grid-cols-3 gap-4">
           <SparklineCard
             title="COMEX"
@@ -161,6 +180,7 @@ export default function Dashboard() {
             color="#C87941"
             latest={latest.comexTotal}
             change={latest.comexChange}
+            onClick={() => navigate('/inventories?tab=comex')}
           />
           <SparklineCard
             title="LME"
@@ -169,6 +189,7 @@ export default function Dashboard() {
             color="#E8A76C"
             latest={latest.lmeTotal}
             change={latest.lmeChange}
+            onClick={() => navigate('/inventories?tab=lme')}
           />
           <SparklineCard
             title="SHFE"
@@ -177,6 +198,7 @@ export default function Dashboard() {
             color="#8B5A2B"
             latest={latest.shfeTotal}
             change={latest.shfeChange}
+            onClick={() => navigate('/inventories?tab=shfe')}
           />
         </div>
       </div>

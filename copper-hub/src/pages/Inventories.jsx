@@ -1,12 +1,12 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
-  LineChart, Line, AreaChart, Area, BarChart, Bar,
-  XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, ReferenceLine,
+  LineChart, Line, AreaChart, Area,
+  XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import { useInventoryData } from '../data/hooks/useInventoryData'
 import ExchangeTab from '../components/ui/ExchangeTab'
 import SectionHeader from '../components/ui/SectionHeader'
-import DataTable from '../components/ui/DataTable'
 import KPICard from '../components/ui/KPICard'
 import SignalBadge from '../components/ui/SignalBadge'
 
@@ -21,20 +21,190 @@ const TOOLTIP_STYLE = {
   fontSize: 11,
 }
 
+const RANGES = ['30D', '3M', '6M', '1Y', '2Y']
+
+// Returns cutoff date string based on range, relative to 2026-03-14
+function rangeCutoff(range) {
+  const cutoffs = {
+    '30D': '2026-02-12',
+    '3M':  '2025-12-14',
+    '6M':  '2025-09-14',
+    '1Y':  '2025-03-14',
+    '2Y':  '2024-03-14',
+  }
+  return cutoffs[range] ?? '2026-02-12'
+}
+
+function filterByRange(history, range) {
+  const cutoff = rangeCutoff(range)
+  return history.filter(r => r.date >= cutoff)
+}
+
+function RangePicker({ value, onChange }) {
+  return (
+    <div className="flex gap-1">
+      {RANGES.map(r => (
+        <button
+          key={r}
+          onClick={() => onChange(r)}
+          className={`px-3 py-1 text-xs font-mono rounded border transition-colors ${
+            value === r
+              ? 'bg-[#C87941] border-[#C87941] text-[#080D14] font-semibold'
+              : 'bg-bg-card border-[#1A2332] text-txt-secondary hover:border-[#C87941]/50'
+          }`}
+        >
+          {r}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function WarehouseAccordionTable({ warehouses }) {
+  const [expanded, setExpanded] = useState(null)
+
+  return (
+    <div className="bg-bg-card border border-[#1A2332] rounded-lg overflow-hidden">
+      {/* Header */}
+      <div className="grid grid-cols-[24px_1fr_120px_120px_120px_80px] gap-0 px-4 py-2 border-b border-[#1A2332] bg-[#080D14]">
+        <div />
+        <div className="text-txt-secondary text-xs font-mono uppercase tracking-wider">Warehouse</div>
+        <div className="text-txt-secondary text-xs font-mono uppercase tracking-wider text-right">Registered</div>
+        <div className="text-txt-secondary text-xs font-mono uppercase tracking-wider text-right">Eligible</div>
+        <div className="text-txt-secondary text-xs font-mono uppercase tracking-wider text-right">Total</div>
+        <div className="text-txt-secondary text-xs font-mono uppercase tracking-wider text-right">Reg %</div>
+      </div>
+
+      {warehouses.map((wh) => {
+        const isOpen = expanded === wh.name
+        return (
+          <div key={wh.name}>
+            {/* Warehouse row */}
+            <div
+              className="grid grid-cols-[24px_1fr_120px_120px_120px_80px] gap-0 px-4 py-2.5 border-b border-[#1A2332] cursor-pointer hover:bg-[#0C1220] transition-colors"
+              onClick={() => setExpanded(isOpen ? null : wh.name)}
+            >
+              <div className="text-txt-secondary text-xs font-mono flex items-center">
+                {isOpen ? '▼' : '▶'}
+              </div>
+              <div className="text-txt-primary text-xs font-mono">{wh.name}</div>
+              <div className="text-txt-primary text-xs font-mono text-right">{fmt(wh.registered)}</div>
+              <div className="text-txt-primary text-xs font-mono text-right">{fmt(wh.eligible)}</div>
+              <div className="text-txt-primary text-xs font-mono text-right font-semibold">{fmt(wh.total)}</div>
+              <div className="text-txt-primary text-xs font-mono text-right">{wh.regPct.toFixed(1)}%</div>
+            </div>
+
+            {/* Expanded sub-table */}
+            {isOpen && (
+              <div className="bg-[#080D14] border-b border-[#1A2332]">
+                <div className="grid grid-cols-[24px_1fr_120px_120px_120px] gap-0 px-4 py-1.5 border-b border-[#1A2332]/50">
+                  <div />
+                  <div className="text-[#C87941] text-xs font-mono uppercase tracking-wider">Week</div>
+                  <div className="text-[#C87941] text-xs font-mono uppercase tracking-wider text-right">Registered</div>
+                  <div className="text-[#C87941] text-xs font-mono uppercase tracking-wider text-right">Eligible</div>
+                  <div className="text-[#C87941] text-xs font-mono uppercase tracking-wider text-right">Total</div>
+                </div>
+                {wh.history.map((row) => (
+                  <div
+                    key={row.week}
+                    className="grid grid-cols-[24px_1fr_120px_120px_120px] gap-0 px-4 py-1.5 border-b border-[#1A2332]/30 last:border-b-0"
+                  >
+                    <div />
+                    <div className="text-txt-secondary text-xs font-mono">{row.week}</div>
+                    <div className="text-txt-secondary text-xs font-mono text-right">{fmt(row.registered)}</div>
+                    <div className="text-txt-secondary text-xs font-mono text-right">{fmt(row.eligible)}</div>
+                    <div className="text-txt-secondary text-xs font-mono text-right">{fmt(row.total)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function RegionAccordionTable({ regions, grandTotal }) {
+  const [expanded, setExpanded] = useState(null)
+
+  return (
+    <div className="bg-bg-card border border-[#1A2332] rounded-lg overflow-hidden">
+      {/* Header */}
+      <div className="grid grid-cols-[24px_1fr_120px_100px] gap-0 px-4 py-2 border-b border-[#1A2332] bg-[#080D14]">
+        <div />
+        <div className="text-txt-secondary text-xs font-mono uppercase tracking-wider">Region</div>
+        <div className="text-txt-secondary text-xs font-mono uppercase tracking-wider text-right">Total (mt)</div>
+        <div className="text-txt-secondary text-xs font-mono uppercase tracking-wider text-right">Share %</div>
+      </div>
+
+      {regions.map((region) => {
+        const isOpen = expanded === region.name
+        return (
+          <div key={region.name}>
+            <div
+              className="grid grid-cols-[24px_1fr_120px_100px] gap-0 px-4 py-2.5 border-b border-[#1A2332] cursor-pointer hover:bg-[#0C1220] transition-colors"
+              onClick={() => setExpanded(isOpen ? null : region.name)}
+            >
+              <div className="text-txt-secondary text-xs font-mono flex items-center">
+                {isOpen ? '▼' : '▶'}
+              </div>
+              <div className="text-txt-primary text-xs font-mono">{region.name}</div>
+              <div className="text-txt-primary text-xs font-mono text-right font-semibold">{fmt(region.total)}</div>
+              <div className="text-txt-primary text-xs font-mono text-right">
+                {((region.total / grandTotal) * 100).toFixed(1)}%
+              </div>
+            </div>
+
+            {isOpen && (
+              <div className="bg-[#080D14] border-b border-[#1A2332]">
+                <div className="grid grid-cols-[24px_1fr_120px] gap-0 px-4 py-1.5 border-b border-[#1A2332]/50">
+                  <div />
+                  <div className="text-[#C87941] text-xs font-mono uppercase tracking-wider">Week</div>
+                  <div className="text-[#C87941] text-xs font-mono uppercase tracking-wider text-right">Total (mt)</div>
+                </div>
+                {region.history.map((row) => (
+                  <div
+                    key={row.week}
+                    className="grid grid-cols-[24px_1fr_120px] gap-0 px-4 py-1.5 border-b border-[#1A2332]/30 last:border-b-0"
+                  >
+                    <div />
+                    <div className="text-txt-secondary text-xs font-mono">{row.week}</div>
+                    <div className="text-txt-secondary text-xs font-mono text-right">{fmt(row.total)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {/* Totals row */}
+      <div className="grid grid-cols-[24px_1fr_120px_100px] gap-0 px-4 py-2.5 bg-[#080D14]">
+        <div />
+        <div className="text-txt-primary text-xs font-mono font-semibold">TOTAL</div>
+        <div className="text-txt-primary text-xs font-mono text-right font-semibold">{fmt(grandTotal)}</div>
+        <div className="text-txt-primary text-xs font-mono text-right">100.0%</div>
+      </div>
+    </div>
+  )
+}
+
 export default function Inventories() {
-  const [activeTab, setActiveTab] = useState('comex')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = searchParams.get('tab') ?? 'comex'
+  const setActiveTab = (tab) => setSearchParams({ tab })
+
+  const [comexRange, setComexRange] = useState('30D')
+  const [lmeRange, setLmeRange] = useState('30D')
+  const [shfeRange, setShfeRange] = useState('30D')
+
   const { comex, comexHistory, lme, lmeHistory, shfe, shfeHistory } = useInventoryData()
 
-  // ---- COMEX warehouse table columns ----
-  const warehouseColumns = [
-    { key: 'name',       label: 'Warehouse',      align: 'left' },
-    { key: 'registered', label: 'Registered (mt)', align: 'right', render: v => fmt(v) },
-    { key: 'eligible',   label: 'Eligible (mt)',   align: 'right', render: v => fmt(v) },
-    { key: 'total',      label: 'Total (mt)',       align: 'right', render: v => fmt(v) },
-    { key: 'regPct',     label: 'Reg %',            align: 'right', render: v => `${v.toFixed(1)}%` },
-  ]
+  const filteredComex = filterByRange(comexHistory, comexRange)
+  const filteredLme   = filterByRange(lmeHistory, lmeRange)
+  const filteredShfe  = filterByRange(shfeHistory, shfeRange)
 
-  // ---- Combined top bar ----
   const combinedTotal = comex.grandTotal + lme.total + shfe.grandTotal
 
   return (
@@ -62,9 +232,9 @@ export default function Inventories() {
         <div className="space-y-6">
           <SectionHeader
             title="COMEX Warehouse Breakdown"
-            subtitle="7 licensed warehouses — registered vs eligible"
+            subtitle="7 licensed warehouses — click a row to expand weekly history"
           />
-          <DataTable columns={warehouseColumns} rows={comex.warehouses} />
+          <WarehouseAccordionTable warehouses={comex.warehouses} />
 
           {/* Totals row */}
           <div className="grid grid-cols-3 gap-4">
@@ -73,10 +243,13 @@ export default function Inventories() {
             <KPICard label="Grand Total" value={fmt(comex.grandTotal)} unit="mt" subtext={`Reg: ${comex.regPct.toFixed(1)}%`} />
           </div>
 
-          <SectionHeader title="COMEX 30-Day History" />
+          <div className="flex items-center justify-between">
+            <SectionHeader title="COMEX Inventory History" />
+            <RangePicker value={comexRange} onChange={setComexRange} />
+          </div>
           <div className="bg-bg-card border border-[#1A2332] rounded-lg p-4">
             <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={comexHistory} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+              <AreaChart data={filteredComex} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <XAxis dataKey="date" tick={{ fill: '#9CA3AF', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickFormatter={d => d.slice(5)} />
                 <YAxis tick={{ fill: '#9CA3AF', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickFormatter={v => (v / 1000).toFixed(0) + 'k'} />
                 <Tooltip contentStyle={TOOLTIP_STYLE} formatter={v => [fmt(v) + ' mt']} />
@@ -109,10 +282,13 @@ export default function Inventories() {
             <KPICard label="Cancelled %" value={`${lme.cancelledPct.toFixed(1)}%`} signal={lme.cancelledPct > 30 ? 'bull' : 'neutral'} subtext="Threshold: >30%" />
           </div>
 
-          <SectionHeader title="LME 30-Day History" subtitle="Cancelled warrants indicate imminent physical withdrawal" />
+          <div className="flex items-center justify-between">
+            <SectionHeader title="LME Inventory History" subtitle="Cancelled warrants indicate imminent physical withdrawal" />
+            <RangePicker value={lmeRange} onChange={setLmeRange} />
+          </div>
           <div className="bg-bg-card border border-[#1A2332] rounded-lg p-4">
             <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={lmeHistory} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+              <LineChart data={filteredLme} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <XAxis dataKey="date" tick={{ fill: '#9CA3AF', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickFormatter={d => d.slice(5)} />
                 <YAxis tick={{ fill: '#9CA3AF', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickFormatter={v => (v / 1000).toFixed(0) + 'k'} />
                 <Tooltip contentStyle={TOOLTIP_STYLE} formatter={v => [fmt(v) + ' mt']} />
@@ -128,23 +304,16 @@ export default function Inventories() {
       {/* ---- SHFE tab ---- */}
       {activeTab === 'shfe' && (
         <div className="space-y-6">
-          <SectionHeader title="SHFE Regional Breakdown" subtitle="Shanghai, Guangdong, Jiangsu, Zhejiang" />
-          <DataTable
-            columns={[
-              { key: 'name',  label: 'Region',     align: 'left' },
-              { key: 'total', label: 'Total (mt)',  align: 'right', render: v => fmt(v) },
-              { key: 'total', label: 'Share %',     align: 'right', render: (v) => `${((v / shfe.grandTotal) * 100).toFixed(1)}%` },
-            ]}
-            rows={[
-              ...shfe.regions,
-              { name: 'TOTAL', total: shfe.grandTotal },
-            ]}
-          />
+          <SectionHeader title="SHFE Regional Breakdown" subtitle="Click a region to expand weekly history" />
+          <RegionAccordionTable regions={shfe.regions} grandTotal={shfe.grandTotal} />
 
-          <SectionHeader title="SHFE 30-Day History" />
+          <div className="flex items-center justify-between">
+            <SectionHeader title="SHFE Inventory History" />
+            <RangePicker value={shfeRange} onChange={setShfeRange} />
+          </div>
           <div className="bg-bg-card border border-[#1A2332] rounded-lg p-4">
             <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={shfeHistory} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+              <LineChart data={filteredShfe} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <XAxis dataKey="date" tick={{ fill: '#9CA3AF', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickFormatter={d => d.slice(5)} />
                 <YAxis tick={{ fill: '#9CA3AF', fontSize: 10, fontFamily: 'JetBrains Mono' }} tickFormatter={v => (v / 1000).toFixed(0) + 'k'} />
                 <Tooltip contentStyle={TOOLTIP_STYLE} formatter={v => [fmt(v) + ' mt', 'SHFE Total']} />
