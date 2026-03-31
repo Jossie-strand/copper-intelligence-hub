@@ -141,6 +141,7 @@ def fetch_wits_trade(reporter: str, partner: str, product: str,
             return []
 
         resp.raise_for_status()
+        resp.encoding = 'utf-8-sig'
 
     except requests.exceptions.RequestException as e:
         print(f"    → Request failed: {e}")
@@ -294,17 +295,10 @@ def fetch_country_metadata() -> list:
 
     resp = requests.get(url, headers=FETCH_HEADERS, timeout=60)
     resp.raise_for_status()
-
-    print(f"  Response status: {resp.status_code}")
-    print(f"  Content-Type: {resp.headers.get('Content-Type', 'unknown')}")
-    print(f"  First 500 chars: {resp.text[:500]}")
+    resp.encoding = 'utf-8-sig'
+    clean_text = resp.text
 
     countries = []
-    clean_text = resp.text.lstrip('\ufeff')
-
-    if not clean_text.strip().startswith('<?xml') and not clean_text.strip().startswith('<'):
-        raise ValueError(f"WITS returned non-XML response: {clean_text[:200]}")
-
     root = ET.fromstring(clean_text)
 
     for elem in root.iter():
