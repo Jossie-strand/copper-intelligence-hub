@@ -162,7 +162,7 @@ def parse_wits_xml(xml_text: str, reporter: str, partner: str,
     results = []
 
     try:
-        root = ET.fromstring(xml_text)
+        root = ET.fromstring(xml_text.lstrip('\ufeff'))
     except ET.ParseError as e:
         print(f"    → XML parse error: {e}")
         return []
@@ -296,7 +296,8 @@ def fetch_country_metadata() -> list:
     resp.raise_for_status()
 
     countries = []
-    root = ET.fromstring(resp.text)
+    clean_text = resp.text.lstrip('\ufeff')
+    root = ET.fromstring(clean_text)
 
     for elem in root.iter():
         tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
