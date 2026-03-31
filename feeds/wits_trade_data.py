@@ -295,8 +295,16 @@ def fetch_country_metadata() -> list:
     resp = requests.get(url, headers=FETCH_HEADERS, timeout=60)
     resp.raise_for_status()
 
+    print(f"  Response status: {resp.status_code}")
+    print(f"  Content-Type: {resp.headers.get('Content-Type', 'unknown')}")
+    print(f"  First 500 chars: {resp.text[:500]}")
+
     countries = []
     clean_text = resp.text.lstrip('\ufeff')
+
+    if not clean_text.strip().startswith('<?xml') and not clean_text.strip().startswith('<'):
+        raise ValueError(f"WITS returned non-XML response: {clean_text[:200]}")
+
     root = ET.fromstring(clean_text)
 
     for elem in root.iter():
