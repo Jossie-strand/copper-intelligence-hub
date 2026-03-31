@@ -4,3 +4,4 @@ gspread==6.1.2
 google-auth==2.29.0
 beautifulsoup4==4.12.3
 lxml==5.2.1
+supabase==2.13.0
