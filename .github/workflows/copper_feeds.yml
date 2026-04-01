@@ -152,6 +152,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          COMTRADE_API_KEY: ${{ secrets.COMTRADE_API_KEY }}
         run: python feeds/wits_trade_data.py
 
   # ── PLACEHOLDER: COPPER PRICE ──────────────────────────────
