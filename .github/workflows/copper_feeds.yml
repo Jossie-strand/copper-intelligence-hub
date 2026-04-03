@@ -161,6 +161,29 @@ jobs:
           COMTRADE_API_KEY: ${{ secrets.COMTRADE_API_KEY }}
         run: python feeds/wits_trade_data.py
 
+  # ── BACKFILL: GOOGLE SHEETS → SUPABASE ─────────────────────
+  backfill-to-supabase:
+    name: Backfill Google Sheets → Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run backfill
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python feeds/backfill_to_supabase.py
+
   # ── PLACEHOLDER: COPPER PRICE ──────────────────────────────
   # copper-price:
   #   name: Copper Price Feed
