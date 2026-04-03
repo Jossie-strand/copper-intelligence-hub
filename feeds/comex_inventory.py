@@ -23,6 +23,7 @@ import xlrd
 import gspread
 from google.oauth2.service_account import Credentials
 from dashboard import write_exchange, ensure_headers
+from supabase_writer import write_inventory, write_comex_warehouses
 
 # ── CONFIG ────────────────────────────────────────────────────
 CME_URL       = "https://www.cmegroup.com/delivery_reports/Copper_Stocks.xls"
@@ -290,6 +291,8 @@ def write_to_sheet(data):
         }
     )
 
+    return {"data_date": data_date, "change_mt": change_mt}
+
 
 # ── MAIN ──────────────────────────────────────────────────────
 def main():
@@ -306,7 +309,21 @@ def main():
         if not data["total_st"]:
             raise ValueError("Parse failed — total_st is None. Check row logs above.")
 
-        write_to_sheet(data)
+        sheet_result = write_to_sheet(data)
+
+        # ── Supabase (additive — failure here won't break Sheets) ──
+        try:
+            sb_date    = sheet_result["data_date"]
+            sb_change  = sheet_result["change_mt"]
+            write_inventory(sb_date, "COMEX", data["total_mt"], sb_change, CME_URL)
+            write_comex_warehouses(
+                sb_date, data["warehouses"],
+                report_date=data["report_date"],
+                activity_date=data["activity_date"],
+            )
+        except Exception as e:
+            print(f"⚠️  Supabase write failed (non-fatal): {e}")
+
         print("\n✅ Done.")
 
     except Exception as e:

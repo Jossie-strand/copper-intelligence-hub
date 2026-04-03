@@ -6,6 +6,7 @@ import Pricing from './pages/Pricing'
 import GlobalMines from './pages/GlobalMines'
 import SupplyDemand from './pages/SupplyDemand'
 import Disruptions from './pages/Disruptions'
+import TradeFlows from './pages/TradeFlows'
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="pricing" element={<Pricing />} />
           <Route path="mines" element={<GlobalMines />} />
           <Route path="supply-demand" element={<SupplyDemand />} />
+          <Route path="trade-flows" element={<TradeFlows />} />
           <Route path="disruptions" element={<Disruptions />} />
         </Route>
       </Routes>

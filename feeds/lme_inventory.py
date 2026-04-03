@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 import gspread
 from google.oauth2.service_account import Credentials
 from dashboard import write_exchange, ensure_headers
+from supabase_writer import write_inventory
 
 # ── CONFIG ────────────────────────────────────────────────────
 WESTMETALL_URL = "https://www.westmetall.com/en/markdaten.php"
@@ -166,6 +167,17 @@ def main():
             raise ValueError("Parse failed — total_mt is None")
 
         write_to_sheet(data)
+
+        # ── Supabase (additive — failure here won't break Sheets) ──
+        try:
+            write_inventory(
+                data["report_date"], "LME",
+                data["total_mt"], data["change_mt"],
+                WESTMETALL_URL,
+            )
+        except Exception as e:
+            print(f"⚠️  Supabase write failed (non-fatal): {e}")
+
         print("\n✅ Done.")
 
     except Exception as e:

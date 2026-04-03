@@ -6,6 +6,7 @@ const navItems = [
   { to: '/pricing',       label: 'Pricing' },
   { to: '/mines',         label: 'Global Mines' },
   { to: '/supply-demand', label: 'Supply & Demand' },
+  { to: '/trade-flows',   label: 'Trade Flows' },
   { to: '/disruptions',   label: 'Disruptions' },
 ]
 

@@ -43,6 +43,8 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SHEET_NAME: "3-exchange-inventory-tracker"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python feeds/comex_inventory.py
 
   # ── LME INVENTORY ─────────────────────────────
@@ -62,6 +64,8 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           LME_USERNAME: ${{ secrets.LME_USERNAME }}
           LME_PASSWORD: ${{ secrets.LME_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
   # ── SHFE INVENTORY ────────────────────────────
   shfe-inventory:
@@ -78,6 +82,8 @@ jobs:
       - run: python feeds/shfe_inventory.py
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
   # ── MINE DISRUPTION MONITOR ───────────────────
   # Scans major miner IR pages daily for disruption signals

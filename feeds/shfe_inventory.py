@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 import gspread
 from google.oauth2.service_account import Credentials
 from dashboard import write_exchange, ensure_headers
+from supabase_writer import write_inventory, write_shfe_regions
 
 # ── CONFIG ────────────────────────────────────────────────────
 SHFE_URL_TEMPLATE = (
@@ -207,6 +208,15 @@ def main():
 
         print(f"\n[3] Writing to Google Sheets...")
         write_to_sheet(date_str, data)
+
+        # ── Supabase (additive — failure here won't break Sheets) ──
+        try:
+            report_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+            source_url  = build_url(date_str)
+            write_inventory(report_date, "SHFE", data["total_mt"], data["change_mt"], source_url)
+            write_shfe_regions(report_date, data.get("regions", {}), total_mt=data["total_mt"])
+        except Exception as e:
+            print(f"⚠️  Supabase write failed (non-fatal): {e}")
 
         print("\n✅ Done.")
 
