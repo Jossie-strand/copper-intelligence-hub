@@ -184,15 +184,24 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python feeds/backfill_to_supabase.py
 
-  # ── PLACEHOLDER: COPPER PRICE ──────────────────────────────
-  # copper-price:
-  #   name: Copper Price Feed
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with: { python-version: "3.11" }
-  #     - run: pip install -r requirements.txt
-  #     - run: python feeds/copper_price.py
-  #       env:
-  #         GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+  # ── COPPER PRICES (FRED monthly + Stooq daily) ─────────────
+  copper-prices:
+    name: Copper Prices
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run copper prices feed
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python feeds/copper_prices.py
