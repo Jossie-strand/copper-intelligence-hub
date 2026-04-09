@@ -340,15 +340,27 @@ def fetch_shfe_akshare():
             end = pd.Timestamp.now().strftime("%Y%m%d")
             print(f"📊 AKShare SHFE: fetching {start} to {end} (latest in DB: {latest_date})")
         else:
-            # First run — fetch last 90 days (keeps it fast; can backfill later)
-            start = (pd.Timestamp.now() - pd.Timedelta(days=90)).strftime("%Y%m%d")
+            # First run — fetch last 14 days only to stay within timeout
+            start = (pd.Timestamp.now() - pd.Timedelta(days=14)).strftime("%Y%m%d")
             end = pd.Timestamp.now().strftime("%Y%m%d")
             print(f"📊 AKShare SHFE: first run — fetching {start} to {end}")
 
         sys.stdout.flush()
 
-        # Single bulk call for the full date range
-        df = ak.get_futures_daily(start_date=start, end_date=end, market="SHFE")
+        # Use signal-based timeout on Linux to prevent AKShare from hanging
+        import signal
+
+        def _timeout_handler(signum, frame):
+            raise TimeoutError("AKShare call exceeded 120s timeout")
+
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(120)  # 2 minute hard limit
+
+        try:
+            df = ak.get_futures_daily(start_date=start, end_date=end, market="SHFE")
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
         if df is None or df.empty:
             print("⚠️  AKShare returned no SHFE data")
             return 0
