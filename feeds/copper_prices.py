@@ -4,7 +4,7 @@ feeds/copper_prices.py
 Copper pricing pipeline — three sources into one Supabase table:
   1. FRED Excel backfill  (IMF monthly, 1992–2026)
   2. FRED API latest      (IMF monthly, last 12 observations)
-  3. Stooq daily          (COMEX HG.F front-month futures, daily OHLCV)
+  3. Yahoo Finance daily   (COMEX HG=F front-month futures, daily OHLCV)
 
 Table: copper_prices (upsert on data_date + frequency + source + symbol)
 """
@@ -126,40 +126,40 @@ def fetch_fred_latest():
     return count
 
 
-# ── 3. Stooq daily OHLCV ────────────────────────────────────────────────────
+# ── 3. Yahoo Finance daily OHLCV ─────────────────────────────────────────────
 
-def fetch_stooq_daily():
-    """Fetch COMEX copper futures (HG.F) daily data from Stooq."""
+def fetch_yfinance_daily():
+    """Fetch COMEX copper futures (HG=F) daily data from Yahoo Finance."""
     try:
-        import pandas_datareader.data as web
+        import yfinance as yf
     except ImportError:
-        print("⚠️  pandas_datareader not installed — skipping Stooq fetch")
+        print("⚠️  yfinance not installed — skipping daily fetch")
         return 0
 
     try:
-        # Check how much Stooq data we already have
+        # Check how much data we already have
         client = get_client()
         result = client.table("copper_prices").select("data_date") \
-            .eq("source", "Stooq").eq("symbol", "HG.F") \
+            .eq("source", "Yahoo").eq("symbol", "HG=F") \
             .order("data_date", desc=True).limit(1).execute()
 
         if result.data:
-            # Existing data — fetch last 30 days
             latest_date = result.data[0]["data_date"]
-            start = pd.Timestamp(latest_date) - pd.Timedelta(days=5)
-            end = pd.Timestamp.now()
-            print(f"📊 Stooq: fetching from {start.date()} (latest in DB: {latest_date})")
-            df = web.DataReader("HG.F", "stooq", start=start, end=end)
+            print(f"📊 Yahoo Finance: latest in DB is {latest_date}, fetching last 30 days")
+            df = yf.download("HG=F", period="1mo", progress=False)
         else:
-            # First run — fetch all available history
-            print("📊 Stooq: first run — fetching full history")
-            df = web.DataReader("HG.F", "stooq")
+            print("📊 Yahoo Finance: first run — fetching max history")
+            df = yf.download("HG=F", period="max", progress=False)
 
         if df.empty:
-            print("⚠️  Stooq returned no data")
+            print("⚠️  Yahoo Finance returned no data for HG=F")
             return 0
 
-        print(f"📊 Stooq: received {len(df)} rows")
+        # yfinance may return MultiIndex columns — flatten if needed
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        print(f"📊 Yahoo Finance HG=F: received {len(df)} rows")
 
         rows = []
         for date_idx, r in df.iterrows():
@@ -171,30 +171,30 @@ def fetch_stooq_daily():
             row = {
                 "data_date": date_str,
                 "frequency": "daily",
-                "source": "Stooq",
-                "symbol": "HG.F",
-                "price": float(close_val),
+                "source": "Yahoo",
+                "symbol": "HG=F",
+                "price": round(float(close_val), 4),
                 "price_unit": "USD/lb",
             }
             if not pd.isna(r.get("Open")):
-                row["open"] = float(r["Open"])
+                row["open"] = round(float(r["Open"]), 4)
             if not pd.isna(r.get("High")):
-                row["high"] = float(r["High"])
+                row["high"] = round(float(r["High"]), 4)
             if not pd.isna(r.get("Low")):
-                row["low"] = float(r["Low"])
+                row["low"] = round(float(r["Low"]), 4)
             if not pd.isna(r.get("Close")):
-                row["close"] = float(r["Close"])
+                row["close"] = round(float(r["Close"]), 4)
             if not pd.isna(r.get("Volume")):
                 row["volume"] = int(r["Volume"])
 
             rows.append(row)
 
         count = upsert_prices(rows)
-        print(f"✅ Stooq: {count} daily rows upserted")
+        print(f"✅ Yahoo Finance HG=F: {count} daily rows upserted")
         return count
 
     except Exception as e:
-        print(f"⚠️  Stooq fetch failed: {e}")
+        print(f"⚠️  Yahoo Finance fetch failed: {e}")
         return 0
 
 
@@ -221,8 +221,8 @@ def main():
     print("\n── FRED API (monthly) ──")
     monthly_count += fetch_fred_latest()
 
-    print("\n── Stooq (daily OHLCV) ──")
-    daily_count += fetch_stooq_daily()
+    print("\n── Yahoo Finance (daily OHLCV) ──")
+    daily_count += fetch_yfinance_daily()
 
     print("\n" + "=" * 60)
     print(f"SUMMARY: {monthly_count} monthly rows, {daily_count} daily rows")
