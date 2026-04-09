@@ -365,25 +365,61 @@ def fetch_shfe_akshare():
             print("⚠️  AKShare returned no SHFE data")
             return 0
 
-        # Filter for copper aggregate rows (symbol == "CU")
-        cu_df = df[df["symbol"].str.upper() == "CU"].copy()
+        # Debug: show columns and sample symbols to diagnose filtering
+        print(f"📊 AKShare columns: {list(df.columns)}")
+        sys.stdout.flush()
+
+        # Find the symbol/variety column — akshare versions use different names
+        sym_col = None
+        for candidate in ["symbol", "variety", "品种", "product"]:
+            if candidate in df.columns:
+                sym_col = candidate
+                break
+
+        if sym_col is None:
+            print(f"⚠️  Cannot find symbol column in: {list(df.columns)}")
+            # Print first row for debugging
+            print(f"📊 First row: {df.iloc[0].to_dict()}")
+            return 0
+
+        unique_syms = df[sym_col].unique()[:20]
+        print(f"📊 AKShare unique symbols (first 20): {list(unique_syms)}")
+        sys.stdout.flush()
+
+        # Filter for copper — match "CU", "cu", or strings starting with "cu"
+        cu_mask = df[sym_col].str.upper().str.startswith("CU")
+        cu_df = df[cu_mask].copy()
         if cu_df.empty:
             print("⚠️  No CU (copper) rows in AKShare SHFE data")
             return 0
 
         print(f"📊 AKShare SHFE CU: {len(cu_df)} rows received")
+        print(f"📊 First CU row: {cu_df.iloc[0].to_dict()}")
         sys.stdout.flush()
 
         rows = []
         for _, r in cu_df.iterrows():
-            settle = r.get("settle")
-            if pd.isna(settle) or settle == 0:
+            # Try multiple column names for settlement price
+            settle = None
+            for col in ["settle", "settlement", "结算价", "close", "收盘价"]:
+                if col in r.index and not pd.isna(r.get(col)) and r.get(col) != 0:
+                    settle = r.get(col)
+                    break
+            if settle is None:
                 continue
 
-            # date column may be string "YYYYMMDD" or datetime
-            date_val = r.get("date", r.get("trade_date", ""))
+            # Try multiple column names for date
+            date_val = None
+            for col in ["date", "trade_date", "日期"]:
+                if col in r.index and r.get(col) is not None:
+                    date_val = r.get(col)
+                    break
+            if date_val is None:
+                continue
+
             if isinstance(date_val, str):
-                date_str = f"{date_val[:4]}-{date_val[4:6]}-{date_val[6:8]}"
+                clean = date_val.replace("-", "").replace("/", "")
+                date_str = f"{clean[:4]}-{clean[4:6]}-{clean[6:8]}"
             else:
                 date_str = pd.Timestamp(date_val).strftime("%Y-%m-%d")
 
