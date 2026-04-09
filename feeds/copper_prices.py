@@ -336,61 +336,65 @@ def fetch_shfe_akshare():
 
         if result.data:
             latest_date = result.data[0]["data_date"]
-            # Fetch from a few days before latest to catch any gaps
             start = (pd.Timestamp(latest_date) - pd.Timedelta(days=5)).strftime("%Y%m%d")
             end = pd.Timestamp.now().strftime("%Y%m%d")
             print(f"📊 AKShare SHFE: fetching {start} to {end} (latest in DB: {latest_date})")
         else:
-            # First run — fetch last 2 years
-            start = (pd.Timestamp.now() - pd.Timedelta(days=730)).strftime("%Y%m%d")
+            # First run — fetch last 90 days (keeps it fast; can backfill later)
+            start = (pd.Timestamp.now() - pd.Timedelta(days=90)).strftime("%Y%m%d")
             end = pd.Timestamp.now().strftime("%Y%m%d")
             print(f"📊 AKShare SHFE: first run — fetching {start} to {end}")
 
-        # get_futures_daily returns all SHFE contracts for each date
-        # We need to iterate through dates and filter for copper (CU)
+        sys.stdout.flush()
+
+        # Single bulk call for the full date range
+        df = ak.get_futures_daily(start_date=start, end_date=end, market="SHFE")
+        if df is None or df.empty:
+            print("⚠️  AKShare returned no SHFE data")
+            return 0
+
+        # Filter for copper aggregate rows (symbol == "CU")
+        cu_df = df[df["symbol"].str.upper() == "CU"].copy()
+        if cu_df.empty:
+            print("⚠️  No CU (copper) rows in AKShare SHFE data")
+            return 0
+
+        print(f"📊 AKShare SHFE CU: {len(cu_df)} rows received")
+        sys.stdout.flush()
+
         rows = []
-        current = pd.Timestamp(start)
-        end_ts = pd.Timestamp(end)
+        for _, r in cu_df.iterrows():
+            settle = r.get("settle")
+            if pd.isna(settle) or settle == 0:
+                continue
 
-        while current <= end_ts:
-            date_str = current.strftime("%Y%m%d")
-            try:
-                df = ak.get_futures_daily(start_date=date_str, end_date=date_str, market="SHFE")
-                if df is not None and not df.empty:
-                    # Filter for copper — symbol starts with "cu" or "CU"
-                    cu_df = df[df["symbol"].str.upper() == "CU"]
-                    if not cu_df.empty:
-                        for _, r in cu_df.iterrows():
-                            settle = r.get("settle")
-                            if pd.isna(settle) or settle == 0:
-                                continue
+            # date column may be string "YYYYMMDD" or datetime
+            date_val = r.get("date", r.get("trade_date", ""))
+            if isinstance(date_val, str):
+                date_str = f"{date_val[:4]}-{date_val[4:6]}-{date_val[6:8]}"
+            else:
+                date_str = pd.Timestamp(date_val).strftime("%Y-%m-%d")
 
-                            row = {
-                                "data_date": current.strftime("%Y-%m-%d"),
-                                "frequency": "daily",
-                                "source": "SHFE",
-                                "symbol": "CU",
-                                "price": float(settle),
-                                "price_unit": "CNY/mt",
-                            }
-                            if not pd.isna(r.get("open")):
-                                row["open"] = float(r["open"])
-                            if not pd.isna(r.get("high")):
-                                row["high"] = float(r["high"])
-                            if not pd.isna(r.get("low")):
-                                row["low"] = float(r["low"])
-                            if not pd.isna(r.get("close")):
-                                row["close"] = float(r["close"])
-                            if not pd.isna(r.get("volume")):
-                                row["volume"] = int(r["volume"])
+            row = {
+                "data_date": date_str,
+                "frequency": "daily",
+                "source": "SHFE",
+                "symbol": "CU",
+                "price": float(settle),
+                "price_unit": "CNY/mt",
+            }
+            if not pd.isna(r.get("open")):
+                row["open"] = float(r["open"])
+            if not pd.isna(r.get("high")):
+                row["high"] = float(r["high"])
+            if not pd.isna(r.get("low")):
+                row["low"] = float(r["low"])
+            if not pd.isna(r.get("close")):
+                row["close"] = float(r["close"])
+            if not pd.isna(r.get("volume")):
+                row["volume"] = int(r["volume"])
 
-                            rows.append(row)
-                            break  # Take only the first CU row (aggregate/main)
-            except Exception as e:
-                # Skip individual dates that fail (weekends, holidays)
-                pass
-
-            current += pd.Timedelta(days=1)
+            rows.append(row)
 
         count = upsert_prices(rows)
         print(f"✅ AKShare SHFE CU: {count} daily rows upserted")
@@ -408,6 +412,7 @@ def main():
     print("COPPER PRICING PIPELINE")
     print(f"Run time: {datetime.datetime.utcnow().isoformat()}Z")
     print("=" * 60)
+    sys.stdout.flush()
 
     # Check if table is empty — if so, run Excel backfill first
     client = get_client()
@@ -419,18 +424,23 @@ def main():
 
     if is_empty:
         print("\n📦 Table is empty — running FRED Excel backfill first...")
+        sys.stdout.flush()
         monthly_count += backfill_fred_excel()
 
     print("\n── FRED API (monthly) ──")
+    sys.stdout.flush()
     monthly_count += fetch_fred_latest()
 
     print("\n── COMEX HG=F (daily OHLCV) ──")
+    sys.stdout.flush()
     daily_count += fetch_comex_daily()
 
     print("\n── Westmetall LME (daily) ──")
+    sys.stdout.flush()
     daily_count += fetch_lme_westmetall()
 
     print("\n── AKShare SHFE (daily) ──")
+    sys.stdout.flush()
     daily_count += fetch_shfe_akshare()
 
     print("\n" + "=" * 60)

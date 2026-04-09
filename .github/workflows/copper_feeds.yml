@@ -184,11 +184,11 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python feeds/backfill_to_supabase.py
 
-  # ── COPPER PRICES (FRED monthly + Stooq daily) ─────────────
+  # ── COPPER PRICES (FRED + COMEX + LME + SHFE) ──────────────
   copper-prices:
     name: Copper Prices
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
