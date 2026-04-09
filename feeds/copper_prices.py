@@ -147,13 +147,20 @@ def fetch_yfinance_daily():
             .eq("source", "Yahoo").eq("symbol", "HG=F") \
             .order("data_date", desc=True).limit(1).execute()
 
+        # Use Ticker.history() with explicit start/end dates to avoid
+        # the YFTzMissingError on headless Linux runners
+        ticker = yf.Ticker("HG=F")
+        today = datetime.date.today()
+
         if result.data:
             latest_date = result.data[0]["data_date"]
-            print(f"📊 Yahoo Finance: latest in DB is {latest_date}, fetching last 30 days")
-            df = yf.download("HG=F", period="1mo", progress=False)
+            start = (pd.Timestamp(latest_date) - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+            print(f"📊 Yahoo Finance: latest in DB is {latest_date}, fetching from {start}")
+            df = ticker.history(start=start, end=today.strftime("%Y-%m-%d"))
         else:
-            print("📊 Yahoo Finance: first run — fetching max history")
-            df = yf.download("HG=F", period="max", progress=False)
+            start = "2000-01-01"
+            print("📊 Yahoo Finance: first run — fetching history from 2000")
+            df = ticker.history(start=start, end=today.strftime("%Y-%m-%d"))
 
         if df.empty:
             print("⚠️  Yahoo Finance returned no data for HG=F")
