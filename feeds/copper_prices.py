@@ -132,14 +132,8 @@ def fetch_fred_latest():
 
 # ── 3. Yahoo Finance daily OHLCV ─────────────────────────────────────────────
 
-def fetch_yfinance_daily():
-    """Fetch COMEX copper futures (HG=F) daily data from Yahoo Finance."""
-    try:
-        import yfinance as yf
-    except ImportError:
-        print("⚠️  yfinance not installed — skipping daily fetch")
-        return 0
-
+def fetch_comex_daily():
+    """Fetch COMEX copper futures (HG=F) daily data via Yahoo Finance raw API."""
     try:
         # Check how much data we already have
         client = get_client()
@@ -147,36 +141,48 @@ def fetch_yfinance_daily():
             .eq("source", "Yahoo").eq("symbol", "HG=F") \
             .order("data_date", desc=True).limit(1).execute()
 
-        # Use Ticker.history() with explicit start/end dates to avoid
-        # the YFTzMissingError on headless Linux runners
-        ticker = yf.Ticker("HG=F")
         today = datetime.date.today()
-
         if result.data:
             latest_date = result.data[0]["data_date"]
-            start = (pd.Timestamp(latest_date) - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
-            print(f"📊 Yahoo Finance: latest in DB is {latest_date}, fetching from {start}")
-            df = ticker.history(start=start, end=today.strftime("%Y-%m-%d"))
+            start_dt = pd.Timestamp(latest_date) - pd.Timedelta(days=5)
+            print(f"📊 COMEX HG=F: latest in DB is {latest_date}, fetching from {start_dt.date()}")
         else:
-            start = "2000-01-01"
-            print("📊 Yahoo Finance: first run — fetching history from 2000")
-            df = ticker.history(start=start, end=today.strftime("%Y-%m-%d"))
+            start_dt = pd.Timestamp("2000-01-01")
+            print("📊 COMEX HG=F: first run — fetching history from 2000")
 
-        if df.empty:
-            print("⚠️  Yahoo Finance returned no data for HG=F")
+        period1 = int(start_dt.timestamp())
+        period2 = int(pd.Timestamp(today).timestamp())
+
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/HG%3DF"
+            f"?period1={period1}&period2={period2}&interval=1d"
+        )
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        chart = data.get("chart", {}).get("result", [])
+        if not chart:
+            print("⚠️  Yahoo Finance API returned no chart data for HG=F")
             return 0
 
-        # yfinance may return MultiIndex columns — flatten if needed
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        timestamps = chart[0].get("timestamp", [])
+        quote = chart[0].get("indicators", {}).get("quote", [{}])[0]
 
-        print(f"📊 Yahoo Finance HG=F: received {len(df)} rows")
+        opens = quote.get("open", [])
+        highs = quote.get("high", [])
+        lows = quote.get("low", [])
+        closes = quote.get("close", [])
+        volumes = quote.get("volume", [])
+
+        print(f"📊 COMEX HG=F: received {len(timestamps)} rows")
 
         rows = []
-        for date_idx, r in df.iterrows():
-            date_str = pd.Timestamp(date_idx).strftime("%Y-%m-%d")
-            close_val = r.get("Close")
-            if pd.isna(close_val):
+        for i, ts in enumerate(timestamps):
+            date_str = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+            close_val = closes[i] if i < len(closes) else None
+            if close_val is None:
                 continue
 
             row = {
@@ -187,25 +193,24 @@ def fetch_yfinance_daily():
                 "price": round(float(close_val), 4),
                 "price_unit": "USD/lb",
             }
-            if not pd.isna(r.get("Open")):
-                row["open"] = round(float(r["Open"]), 4)
-            if not pd.isna(r.get("High")):
-                row["high"] = round(float(r["High"]), 4)
-            if not pd.isna(r.get("Low")):
-                row["low"] = round(float(r["Low"]), 4)
-            if not pd.isna(r.get("Close")):
-                row["close"] = round(float(r["Close"]), 4)
-            if not pd.isna(r.get("Volume")):
-                row["volume"] = int(r["Volume"])
+            if i < len(opens) and opens[i] is not None:
+                row["open"] = round(float(opens[i]), 4)
+            if i < len(highs) and highs[i] is not None:
+                row["high"] = round(float(highs[i]), 4)
+            if i < len(lows) and lows[i] is not None:
+                row["low"] = round(float(lows[i]), 4)
+            row["close"] = round(float(close_val), 4)
+            if i < len(volumes) and volumes[i] is not None:
+                row["volume"] = int(volumes[i])
 
             rows.append(row)
 
         count = upsert_prices(rows)
-        print(f"✅ Yahoo Finance HG=F: {count} daily rows upserted")
+        print(f"✅ COMEX HG=F: {count} daily rows upserted")
         return count
 
     except Exception as e:
-        print(f"⚠️  Yahoo Finance fetch failed: {e}")
+        print(f"⚠️  COMEX HG=F fetch failed: {e}")
         return 0
 
 
@@ -419,8 +424,8 @@ def main():
     print("\n── FRED API (monthly) ──")
     monthly_count += fetch_fred_latest()
 
-    print("\n── Yahoo Finance COMEX (daily OHLCV) ──")
-    daily_count += fetch_yfinance_daily()
+    print("\n── COMEX HG=F (daily OHLCV) ──")
+    daily_count += fetch_comex_daily()
 
     print("\n── Westmetall LME (daily) ──")
     daily_count += fetch_lme_westmetall()
