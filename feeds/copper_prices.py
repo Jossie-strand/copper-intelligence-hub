@@ -393,41 +393,27 @@ def fetch_shfe_akshare():
             print("⚠️  No CU (copper) rows in AKShare SHFE data")
             return 0
 
-        print(f"📊 AKShare SHFE CU: {len(cu_df)} rows received")
-        print(f"📊 First CU row: {cu_df.iloc[0].to_dict()}")
+        print(f"📊 AKShare SHFE CU: {len(cu_df)} contracts across {cu_df['date'].nunique()} dates")
         sys.stdout.flush()
 
         rows = []
         for _, r in cu_df.iterrows():
-            # Try multiple column names for settlement price
-            settle = None
-            for col in ["settle", "settlement", "结算价", "close", "收盘价"]:
-                if col in r.index and not pd.isna(r.get(col)) and r.get(col) != 0:
-                    settle = r.get(col)
-                    break
-            if settle is None:
+            settle = r.get("settle")
+            if pd.isna(settle) or settle == 0:
                 continue
 
-            # Try multiple column names for date
-            date_val = None
-            for col in ["date", "trade_date", "日期"]:
-                if col in r.index and r.get(col) is not None:
-                    date_val = r.get(col)
-                    break
-            if date_val is None:
-                continue
+            date_val = str(r.get("date", ""))
+            clean = date_val.replace("-", "").replace("/", "")
+            date_str = f"{clean[:4]}-{clean[4:6]}-{clean[6:8]}"
 
-            if isinstance(date_val, str):
-                clean = date_val.replace("-", "").replace("/", "")
-                date_str = f"{clean[:4]}-{clean[4:6]}-{clean[6:8]}"
-            else:
-                date_str = pd.Timestamp(date_val).strftime("%Y-%m-%d")
+            # Store each contract individually (CU2604, CU2605, etc.)
+            symbol = str(r.get("symbol", "")).upper()
 
             row = {
                 "data_date": date_str,
                 "frequency": "daily",
                 "source": "SHFE",
-                "symbol": "CU",
+                "symbol": symbol,
                 "price": float(settle),
                 "price_unit": "CNY/mt",
             }
@@ -439,8 +425,9 @@ def fetch_shfe_akshare():
                 row["low"] = float(r["low"])
             if not pd.isna(r.get("close")):
                 row["close"] = float(r["close"])
-            if not pd.isna(r.get("volume")):
-                row["volume"] = int(r["volume"])
+            vol = r.get("volume")
+            if not pd.isna(vol) and vol > 0:
+                row["volume"] = int(vol)
 
             rows.append(row)
 
