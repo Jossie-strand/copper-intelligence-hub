@@ -365,11 +365,7 @@ def fetch_shfe_akshare():
             print("⚠️  AKShare returned no SHFE data")
             return 0
 
-        # Debug: show columns and sample symbols to diagnose filtering
-        print(f"📊 AKShare columns: {list(df.columns)}")
-        sys.stdout.flush()
-
-        # Find the symbol/variety column — akshare versions use different names
+        # Find the symbol column — akshare versions may use different names
         sym_col = None
         for candidate in ["symbol", "variety", "品种", "product"]:
             if candidate in df.columns:
@@ -378,15 +374,9 @@ def fetch_shfe_akshare():
 
         if sym_col is None:
             print(f"⚠️  Cannot find symbol column in: {list(df.columns)}")
-            # Print first row for debugging
-            print(f"📊 First row: {df.iloc[0].to_dict()}")
             return 0
 
-        unique_syms = df[sym_col].unique()[:20]
-        print(f"📊 AKShare unique symbols (first 20): {list(unique_syms)}")
-        sys.stdout.flush()
-
-        # Filter for copper — match "CU", "cu", or strings starting with "cu"
+        # Filter for copper contracts (CU2604, CU2605, etc.)
         cu_mask = df[sym_col].str.upper().str.startswith("CU")
         cu_df = df[cu_mask].copy()
         if cu_df.empty:
