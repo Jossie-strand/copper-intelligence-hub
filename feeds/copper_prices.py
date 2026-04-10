@@ -396,17 +396,25 @@ def fetch_shfe_akshare():
         print(f"📊 AKShare SHFE CU: {len(cu_df)} contracts across {cu_df['date'].nunique()} dates")
         sys.stdout.flush()
 
+        def safe_float(val):
+            """Convert to float, returning None for empty strings/NaN."""
+            if val is None or val == "" or (isinstance(val, float) and pd.isna(val)):
+                return None
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return None
+
         rows = []
         for _, r in cu_df.iterrows():
-            settle = r.get("settle")
-            if pd.isna(settle) or settle == 0:
+            settle = safe_float(r.get("settle"))
+            if settle is None or settle == 0:
                 continue
 
             date_val = str(r.get("date", ""))
             clean = date_val.replace("-", "").replace("/", "")
             date_str = f"{clean[:4]}-{clean[4:6]}-{clean[6:8]}"
 
-            # Store each contract individually (CU2604, CU2605, etc.)
             symbol = str(r.get("symbol", "")).upper()
 
             row = {
@@ -414,20 +422,19 @@ def fetch_shfe_akshare():
                 "frequency": "daily",
                 "source": "SHFE",
                 "symbol": symbol,
-                "price": float(settle),
+                "price": settle,
                 "price_unit": "CNY/mt",
             }
-            if not pd.isna(r.get("open")):
-                row["open"] = float(r["open"])
-            if not pd.isna(r.get("high")):
-                row["high"] = float(r["high"])
-            if not pd.isna(r.get("low")):
-                row["low"] = float(r["low"])
-            if not pd.isna(r.get("close")):
-                row["close"] = float(r["close"])
-            vol = r.get("volume")
-            if not pd.isna(vol) and vol > 0:
-                row["volume"] = int(vol)
+            o = safe_float(r.get("open"))
+            h = safe_float(r.get("high"))
+            l = safe_float(r.get("low"))
+            c = safe_float(r.get("close"))
+            v = safe_float(r.get("volume"))
+            if o is not None: row["open"] = o
+            if h is not None: row["high"] = h
+            if l is not None: row["low"] = l
+            if c is not None: row["close"] = c
+            if v is not None and v > 0: row["volume"] = int(v)
 
             rows.append(row)
 
