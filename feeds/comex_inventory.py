@@ -16,7 +16,10 @@ XLS structure (0-based cols):
 
 import os
 import io
+import sys
 import json
+import time
+import random
 import datetime
 import requests
 import xlrd
@@ -37,6 +40,24 @@ SCOPES = [
 ]
 
 ST_TO_MT = 0.907185
+
+# CME blocks datacenter IPs (GitHub Actions runners). Rotate through realistic
+# browser UAs and add full header sets so requests look human.
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) "
+    "Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3_1) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.3.1 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.2420.65",
+]
+
+MAX_FETCH_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 30
 
 WAREHOUSES = [
     "BALTIMORE", "DETROIT", "EL PASO",
@@ -73,16 +94,62 @@ COMEX_HEADERS = [
 
 
 # ── FETCH ─────────────────────────────────────────────────────
-def fetch_xls():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-        "Accept": "application/vnd.ms-excel,*/*",
-        "Referer": "https://www.cmegroup.com/"
+def _build_headers(user_agent):
+    return {
+        "User-Agent": user_agent,
+        "Accept": "application/vnd.ms-excel,application/octet-stream,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Referer": "https://www.cmegroup.com/",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
     }
-    resp = requests.get(CME_URL, headers=headers, timeout=30)
-    resp.raise_for_status()
-    print(f"Fetched XLS: HTTP {resp.status_code}, {len(resp.content)} bytes")
-    return resp.content
+
+
+def fetch_xls():
+    """
+    Fetch the CME Copper Stocks XLS with UA rotation and retry-on-403.
+    Returns bytes on success, or None if CME returned 403 on every attempt.
+    Other HTTP errors still raise.
+    """
+    # Jittered initial delay so concurrent CI jobs don't hit CME in lockstep.
+    initial_delay = random.uniform(1.0, 5.0)
+    print(f"Sleeping {initial_delay:.1f}s before first request…")
+    time.sleep(initial_delay)
+
+    tried_agents = []
+    for attempt in range(1, MAX_FETCH_ATTEMPTS + 1):
+        remaining = [ua for ua in USER_AGENTS if ua not in tried_agents] or USER_AGENTS
+        ua = random.choice(remaining)
+        tried_agents.append(ua)
+
+        print(f"Attempt {attempt}/{MAX_FETCH_ATTEMPTS} — UA: {ua.split(')')[0]}…)")
+        try:
+            resp = requests.get(CME_URL, headers=_build_headers(ua), timeout=30)
+        except requests.RequestException as e:
+            print(f"  Network error: {e}")
+            if attempt < MAX_FETCH_ATTEMPTS:
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            raise
+
+        if resp.status_code == 403:
+            print(f"  HTTP 403 Forbidden (CME blocked this request)")
+            if attempt < MAX_FETCH_ATTEMPTS:
+                print(f"  Waiting {RETRY_DELAY_SECONDS}s before retrying with new UA…")
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            return None
+
+        resp.raise_for_status()
+        print(f"Fetched XLS: HTTP {resp.status_code}, {len(resp.content)} bytes")
+        return resp.content
+
+    return None
 
 
 # ── PARSE ─────────────────────────────────────────────────────
@@ -302,6 +369,9 @@ def main():
 
     try:
         content = fetch_xls()
+        if content is None:
+            print("\n⚠️  CME blocked, COMEX data unchanged")
+            sys.exit(0)
         data    = parse_xls(content)
         print(f"\nParsed: total_st={data['total_st']}, total_mt={data['total_mt']}, "
               f"registered_mt={data['registered_mt']}, eligible_mt={data['eligible_mt']}")
